@@ -1,15 +1,17 @@
 """
 Created on 2024.4.9
 @author: Pineclone
-@version: 0.2.1
+@version: 0.2.5
 
 主执行脚本
 """
+__version__ = '0.2.5'
 
 import concurrent.futures
 import json
 import random
 import sys
+import textwrap
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -18,96 +20,109 @@ from math import floor
 from threading import Thread
 from typing import List
 
+import yaml
 from PyQt5 import QtCore
 from PyQt5 import uic
 from PyQt5.QtCore import Qt, pyqtSignal, QThread, QTimer
 from PyQt5.QtGui import QIntValidator, QFont
 from PyQt5.QtWidgets import *
+from loguru import logger
+
+logger.info(f'Launching ContinuousAcquireScripts, current version: {__version__}')
 
 # 修正窗口界面尺寸
 QtCore.QCoreApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling)
 
-# 单选框被选中后表现的value
-CHECK_BOX_CHECKED = 2
-# xy坐标横移连拍tab对应的下标
-TAB_XY_CONTINUOUS_NUM = 0
-# 单点连拍tab对应的下标
-TAB_SINGLE_POINT_NUM = 1
-
-""" ============XY轴连续拍摄表单默认值============== """
-# 默认曝光度
-DEF_EXPOSURE = 1000
-# 默认y_bin,x_bin
-DEF_X_BIN, DEF_Y_BIN = 1, 1
-# 默认是否启用边界拓展
-DEF_ENABLE_EXTENSION = 0
-# 默认拓展数
-DEF_X_OFF = 0
-DEF_Y_OFF = 0
-# 默认拓展时采用单位
-DEF_EXTENSION_UNIT = 0
-# 默认切割格式，2代表2x2
-DEF_X_SPLITTING_FMT = 2
-DEF_Y_SPLITTING_FMT = 2
-
-# 下拉菜单中以像素作为单位的索引
-COMBO_PIXEL_UNIT_NUM = 0
-# 下拉百分比中以像素作为单位的索引
-COMBO_PERCENT_UNIT_NUM = 1
-# 边缘拓展单位
-DEF_EXTENSION_UNIT_LIST = ['px', '%', ]
-
-# 采用多线程拍摄策略时默认线程池开启线程数量
-DEF_MULTI_THREAD_NUM = 10
-
-# 采用多进程策略时默认进程池开启进程数量
-DEF_MULTI_PROCESS_NUM = 5
-
-""" ============XY轴连续拍摄表单默认值============== """
-# 默认坐标参数
-DEF_POS_FOR_SINGLE = [0, 0, 0, 0]
-# 默认是否启用持续时间
-DEF_ENABLE_DURATION = False
-# 默认持续时间
-DEF_DURATION_VALUE = 10
-# 持续连拍默认采用时间单位
-DEF_DURATION_UNIT = 1
-# 可用时间单位列表
-DEF_DURATION_UNIT_LIST = ['millis', 'seconds', 'minutes', 'hours']
-
-# 默认帧率
-DEF_FRAMERATE = 10
-
-"""
-XY轴横移拍摄是否启用边缘拓展实现防抖处理，0：禁用，1：启用
-XY轴横移拍摄启用边缘拓展时拓展的数值
-XY轴横移拍摄时选用的单位，0：px像素，1：百分比
-"""
-
-""" ============界面默认设定============== """
-# 默认字体设定
-DEF_FONT = QFont("consolas", 8)
+# 项目根目录路径设置
+ROOT_DIR = 'D:/Desktop/Note/Python/Python_Demos/ContinuousAcquireScripts'
 
 # 菜单UI路径设定
-MENU_UI_PATH = 'D:/Desktop/Note/Python/Python_Demos/ContinuousAcquireScripts/ui/ContinuousAcquireMenu.ui'
-WARNING_DIALOG_PATH = 'D:/Desktop/Note/Python/Python_Demos/AcquireScripts/ui/WarningDialog.ui'
+MENU_UI_PATH = f'{ROOT_DIR}/ui/ContinuousAcquireMenu.ui'
 
-# 默认是否启用控制台窗口
-DEF_ENABLE_LOG = 1
-"""
-是否启用输出窗口，0：禁用，1：启用
-"""
+# yaml配置文件路径设定
+CONFIG_PATH = f'{ROOT_DIR}/config.yaml'
+
+# 程序配置字典，通过字典来获取程序配置
+cfg = {}
+# 尝试读取配置，如果配置存在错误则会采用默认配置
+with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+    yml_cfg = yaml.safe_load(f)
+
+    logger.debug(f'Loading config, yaml config path: {CONFIG_PATH}')
+
+
+    def load_val(val_path, yml_sup, def_val):
+        # 加载配置文件并且将值用于参数初始化
+        try:
+            yml_val = yml_sup()
+            if type(yml_val) is not type(def_val):
+                logger.error(
+                    f'\'{val_path}\' is in wrong type, expect {type(def_val)} but receive {type(yml_val)}, using default value: {def_val}')
+                cfg[val_path] = def_val
+                return
+
+            # 如果参数为list需要额外判断
+            if type(yml_val) is list:
+                # 判断长度是否相等
+                if len(yml_val) != len(def_val):
+                    logger.error(
+                        f'\'{val_path}\' bad given params in list, expect {len(def_val)} elements but receive {len(yml_val)}, using default value: {def_val}')
+                    cfg[val_path] = def_val
+                    return
+
+                # 判断每一位上面元素类型是否相等
+                for index, element in enumerate(yml_val):
+                    if type(element) is not type(def_val[index]):
+                        logger.error(
+                            f'\'{val_path}\' bad given params in list, expect {type(def_val[index])} for index {index}, but receive {type(element)}, using default value: {def_val}')
+                    cfg[val_path] = def_val
+                    return
+
+            cfg[val_path] = yml_val
+        except KeyError as e:
+            logger.error(f'\'{val_path}\' has not been defined in yaml config, using default value: {def_val}')
+            cfg[val_path] = def_val
+
+
+    # 通过yml_path来获取yml配置文件参数，以list的形式传入
+
+    # xy轴连续横移拍摄参数初始化
+    load_val('exposure', lambda: yml_cfg['acquire']['xy']['exposure'], 1000)  # 曝光度默认值
+    load_val('x_bin', lambda: yml_cfg['acquire']['xy']['x_bin'], 1)  # x_bin默认值
+    load_val('y_bin', lambda: yml_cfg['acquire']['xy']['y_bin'], 1)  # y_bin默认值
+    load_val('x_off', lambda: yml_cfg['acquire']['xy']['x_off'], 0)  # x轴拓展默认值
+    load_val('y_off', lambda: yml_cfg['acquire']['xy']['y_off'], 0)  # y轴拓展默认值
+    load_val('enable_extension', lambda: yml_cfg['acquire']['xy']['enable_extension'], 0)  # 是否启用边界拓展
+    load_val('extension_unit', lambda: yml_cfg['acquire']['xy']['extension_unit'], 0)  # 边界拓展默认单位，0：px、1：%
+    load_val('x_splitting_format', lambda: yml_cfg['acquire']['xy']['x_splitting_format'], 2)  # x轴默认切割格式
+    load_val('y_splitting_format', lambda: yml_cfg['acquire']['xy']['y_splitting_format'], 2)  # y轴默认切割格式
+    load_val('multi_thread_num', lambda: yml_cfg['acquire']['xy']['multi_thread_num'], 10)  # 默认线程数
+    load_val('multi_process_num', lambda: yml_cfg['acquire']['xy']['multi_process_num'], 5)  # 默认线程数
+
+    # 单点连续拍摄参数初始化
+    load_val('pos_for_sp', lambda: yml_cfg['acquire']['sp']['pos_for_sp'],
+             [0, 0, 0, 0])  # 默认坐标参数，从上到下依次是top,left,bottom,right
+    load_val('enable_duration', lambda: yml_cfg['acquire']['sp']['enable_duration'], False)  # 是否开启持续时间
+    load_val('duration_value', lambda: yml_cfg['acquire']['sp']['duration_value'], 10)  # 默认持续时间
+    load_val('duration_unit', lambda: yml_cfg['acquire']['sp']['duration_unit'], 1)  # 持续连拍默认采用时间单位
+    load_val('framerate', lambda: yml_cfg['acquire']['sp']['framerate'], 10)  # 持续连拍默认采用时间单位
+
+    # 界面参数设定
+    load_val('font', lambda: yml_cfg['ui']['main']['font'], 'consolas')
+    load_val('font_size', lambda: yml_cfg['ui']['main']['font_size'], 8)
+    load_val('enable_log', lambda: yml_cfg['ui']['main']['enable_log'], True)
+
+# 默认字体设定
+DEF_FONT = QFont(cfg['font'], cfg['font_size'])
+
 # 窗口大小设置
-# 主窗口MenuUI参数设置
+DEF_WINDOW_TITLE = 'Continuous Acquire Scripts'
 DEF_WIDTH_WITHOUT_LOG = 350
 DEF_WIDTH_WITH_LOG = 520
 DEF_HEIGHT = 230
-# 弹窗大小设置
-DEF_POPUP_WIDTH = 220
-DEF_POPUP_HEIGHT = 100
 
-# 进度条默认值
-DEF_PROG_BAR_VAL = 0
+# 默认弹窗消息宽度，这在很大程度上影响了弹窗的大小
+DEF_MESSAGE_BOX_TEXT_LEN = 35
 
 
 # 定时任务类，用于启动定时任务
@@ -124,9 +139,9 @@ class ImageUtil:
 
     @staticmethod
     def handle_images(images: dict):
-        # todo: 连拍图像字典处理业务逻辑
+        # todo: 图像结果处理逻辑
         for index, img in images.items():
-            print(f'{index} : {img}')
+            logger.info(f'{index} : {img}')
 
 
 class CameraUtil:
@@ -194,7 +209,7 @@ class CameraUtil:
 class AcquireFacade:
     """ 拍摄门面，通过拍摄门面可以提前设定拍摄参数，然后通过坐标列表的形式完成拍摄任务 """
 
-    def __init__(self, cam_id: int, exposure=DEF_EXPOSURE, x_bin=DEF_X_BIN, y_bin=DEF_Y_BIN):
+    def __init__(self, cam_id: int, exposure=cfg['exposure'], x_bin=cfg['x_bin'], y_bin=cfg['y_bin']):
         self.exposure = exposure
         self.x_bin = x_bin
         self.y_bin = y_bin
@@ -255,6 +270,18 @@ class MainUI(QWidget):
         UNAVAILABLE = 'N/A'
         TERMINABLE = "STOP"
 
+    # 基础常量
+    # 单选框被选中后表现的value
+    CHECK_BOX_CHECKED = 2
+    # xy坐标横移连拍tab对应的下标
+    TAB_XY_CONTINUOUS_NUM = 0
+    # 单点连拍tab对应的下标
+    TAB_SINGLE_POINT_NUM = 1
+    # 边缘拓展单位
+    DEF_EXTENSION_UNIT_LIST = ['px', '%', ]
+    # 可用时间单位列表
+    DEF_DURATION_UNIT_LIST = ['millis', 'seconds', 'minutes', 'hours']
+
     # 进度条信号，提供线程设置主线程进度条渲染的能力
     prog_signal = pyqtSignal(int)
     # 控制台信号，提供线程在控制台打印输出的能力
@@ -283,11 +310,11 @@ class MainUI(QWidget):
         主界面构造方法
         """
         super().__init__()
+        logger.debug('Launching Main Thread')
         # GUI属性初始化
         uic.loadUi(MENU_UI_PATH, self)
-        self.setWindowTitle('Continuous Acquire Menu')
+        self.setWindowTitle(DEF_WINDOW_TITLE)
         self.components = self.__dict__  # 将组件作为对象属性
-        self.threading_strategy_btn_group = QButtonGroup()
         # 程序输出窗口信息缓存
         self.program_output_cache: List[str] = []
 
@@ -297,18 +324,22 @@ class MainUI(QWidget):
         # 子线程池
         self.threads: dict[str, MainUI.TaskThread] = {}
 
+        logger.debug('Initializing GUI')
         # 执行GUI界面初始化方法
         self.init_ui()
 
+        logger.debug('Initializing Task Threads')
         # 初始化任务线程对象
         self.init_threads()
 
         self.acquire_thread = self.threads['acquire_thread']
 
         # 绑定信号和槽函数
+        logger.debug('Initializing Signals and Slot')
         self.init_signals()
 
         self.print_log(f'<span style="color: {LogColor.SAFE}; font-weight:bold">successfully launch menu</span>')
+        logger.info('Successfully launch Main UI')
 
     """
     =============================================================
@@ -317,12 +348,11 @@ class MainUI(QWidget):
     """
 
     def init_ui(self):
-        """ GUI组件初始化 """
+        """ GUI组件初始化，主要负责图形化界面的初始化工作 """
+        self.init_font()
         self.init_enable_extension()
         self.init_stick_on_top()
         self.init_splitting_format()
-        # self.init_threading_mode()
-        # self.init_acquire_mode()
         self.init_program_output()
         self.init_progress_bar()
         self.init_exposure()
@@ -334,11 +364,8 @@ class MainUI(QWidget):
         self.init_duration_value()
         self.init_framerate()
 
-        # 初始化QThread线程，线程通过死循环保持执行
-        # self.init_acquire_thread()
         # 初始化相机下拉选单
         self.init_camera_combo_box()
-
         # 初始化执行按钮
         self.init_exec_btn()
 
@@ -377,7 +404,6 @@ class MainUI(QWidget):
         # 启动程序
         self.components['exec_btn'].clicked.connect(self.click_exec_btn_slot)
 
-
         # 进度条信号，控制进图条渲染
         self.prog_signal.connect(self.set_progress_bar_val)
         # 日志信号，控制日志输出
@@ -392,20 +418,21 @@ class MainUI(QWidget):
         self.img_signal.connect(ImageUtil.handle_images)
         # 刷新可用相机下拉选单
         self.components['load_cameras'].clicked.connect(self.load_cameras_slot)
-        # 警告弹窗和错误弹窗信号绑定
-        self.error_signal.connect(self.error)
-        self.warning_signal.connect(self.warning)
 
         # 对AcquireThread线程的信号和槽进行挂载
-        self.acquire_thread.xy_task_signal.connect(self.acquire_thread.xy_continuous_acquire)
+        self.acquire_thread.xy_task_signal.connect(self.acquire_thread.xy_acquire)
         # 区域连拍信号
-        self.acquire_thread.single_point_signal.connect(self.acquire_thread.single_point_acquire)
+        self.acquire_thread.single_point_signal.connect(self.acquire_thread.sp_acquire)
         # 是否启用单区域连拍持续时间
         self.components['enable_duration'].stateChanged.connect(self.check_enable_duration_slot)
         # 终止线程信号
         self.acquire_thread.terminating_signal.connect(self.acquire_thread.terminating_thread)
         # 定时任务信号
         self.schedule_signal.connect(ScheduleTaskUtil.schedule)
+
+    # 初始化字体
+    def init_font(self):
+        self.setFont(DEF_FONT)
 
     # 初始化执行按钮
     def init_exec_btn(self):
@@ -418,26 +445,26 @@ class MainUI(QWidget):
         self.components['single_pos_bottom'].setValidator(QIntValidator())
         self.components['single_pos_right'].setValidator(QIntValidator())
 
-        self.components['single_pos_top'].setText(str(DEF_POS_FOR_SINGLE[0]))
-        self.components['single_pos_left'].setText(str(DEF_POS_FOR_SINGLE[1]))
-        self.components['single_pos_bottom'].setText(str(DEF_POS_FOR_SINGLE[2]))
-        self.components['single_pos_right'].setText(str(DEF_POS_FOR_SINGLE[3]))
+        self.components['single_pos_top'].setText(str(cfg['pos_for_sp'][0]))
+        self.components['single_pos_left'].setText(str(cfg['pos_for_sp'][1]))
+        self.components['single_pos_bottom'].setText(str(cfg['pos_for_sp'][2]))
+        self.components['single_pos_right'].setText(str(cfg['pos_for_sp'][3]))
 
     # 初始化是否启用持续时间
     def init_enable_duration(self):
-        self.components['enable_duration'].setChecked(DEF_ENABLE_DURATION)
-        self.components['duration_value'].setEnabled(DEF_ENABLE_DURATION)
-        self.components['duration_unit'].setEnabled(DEF_ENABLE_DURATION)
+        self.components['enable_duration'].setChecked(cfg['enable_duration'])
+        self.components['duration_value'].setEnabled(cfg['enable_duration'])
+        self.components['duration_unit'].setEnabled(cfg['enable_duration'])
 
     # 初始化默认拍摄帧率
     def init_framerate(self):
-        self.components['framerate'].setValue(DEF_FRAMERATE)
+        self.components['framerate'].setValue(cfg['framerate'])
 
     def init_duration_value(self):
-        for unit in DEF_DURATION_UNIT_LIST:
+        for unit in self.DEF_DURATION_UNIT_LIST:
             self.components['duration_unit'].addItem(unit)
-        self.components['duration_unit'].setCurrentIndex(DEF_DURATION_UNIT)
-        self.components['duration_value'].setValue(DEF_DURATION_VALUE)
+        self.components['duration_value'].setValue(cfg['duration_value'])
+        self.components['duration_unit'].setCurrentIndex(cfg['duration_unit'])
 
     # 初始化相机下拉选单
     def init_camera_combo_box(self):
@@ -451,20 +478,20 @@ class MainUI(QWidget):
 
     # 初始化binning选择控件
     def init_binning(self):
-        self.components['x_bin'].setValue(DEF_X_BIN)
-        self.components['y_bin'].setValue(DEF_Y_BIN)
+        self.components['x_bin'].setValue(cfg['x_bin'])
+        self.components['y_bin'].setValue(cfg['y_bin'])
 
     # 初始化曝光度输出框
     def init_exposure(self):
         self.components['exposure'].setValidator(QIntValidator())
-        self.components['exposure'].setText(str(DEF_EXPOSURE))
+        self.components['exposure'].setText(str(cfg['exposure']))
 
     # 初始化进度条
     def init_progress_bar(self):
-        self.components['progress_bar'].setValue(DEF_PROG_BAR_VAL)
+        self.components['progress_bar'].setValue(0)
 
     def init_program_output(self):
-        if DEF_ENABLE_LOG == 1:
+        if cfg['enable_log']:
             self.stick_resize(DEF_WIDTH_WITH_LOG, DEF_HEIGHT)
             self.components['program_output'].setChecked(True)
         else:
@@ -473,8 +500,8 @@ class MainUI(QWidget):
 
     def init_splitting_format(self):
         # 切割规格选择
-        self.components['x_splitting_format'].setValue(DEF_X_SPLITTING_FMT)
-        self.components['y_splitting_format'].setValue(DEF_Y_SPLITTING_FMT)
+        self.components['x_splitting_format'].setValue(cfg['x_splitting_format'])
+        self.components['y_splitting_format'].setValue(cfg['y_splitting_format'])
 
     def init_stick_on_top(self):
         # 设置窗口是否可以一直处于顶端
@@ -490,19 +517,19 @@ class MainUI(QWidget):
     def init_enable_extension(self):
         # 初始化边界拓展参数设定
         # 单位选择
-        for unit in DEF_EXTENSION_UNIT_LIST:
+        for unit in self.DEF_EXTENSION_UNIT_LIST:
             self.components['unit_combo'].addItem(unit)
 
-        flag = (DEF_ENABLE_EXTENSION == 1)
+        flag = (cfg['enable_extension'] == 1)
         self.components['enable_extension'].setChecked(flag)
         self.components['x_off'].setEnabled(flag)
         self.components['y_off'].setEnabled(flag)
         self.components['unit_combo'].setEnabled(flag)
         # 设置spinBox初始值
-        self.components['x_off'].setValue(DEF_X_OFF)
-        self.components['y_off'].setValue(DEF_Y_OFF)
+        self.components['x_off'].setValue(cfg['x_off'])
+        self.components['y_off'].setValue(cfg['y_off'])
         # 设置当前选择单位
-        self.components['unit_combo'].setCurrentIndex(DEF_EXTENSION_UNIT)
+        self.components['unit_combo'].setCurrentIndex(cfg['extension_unit'])
 
     """
     =============================================================
@@ -514,19 +541,14 @@ class MainUI(QWidget):
         for name, t in self.threads.items():
             if not t.thread_close():
                 event.ignore()
+                logger.debug('Main UI ignore close event')
                 return
 
+        logger.debug('Main UI accept close event')
         event.accept()
-
-
-    def on_ok(self, event):
-        event.accept()
-
-    def on_cancel(self, event):
-        event.ignore()
 
     def check_enable_duration_slot(self, num: int):
-        flag = (num == CHECK_BOX_CHECKED)
+        flag = (num == self.CHECK_BOX_CHECKED)
         self.components['duration_value'].setEnabled(flag)
         self.components['duration_unit'].setEnabled(flag)
 
@@ -557,29 +579,29 @@ class MainUI(QWidget):
         if self.get_status() == self.Status.UNAVAILABLE:
             return
 
+
+
         # 首先查询当前运行模式
         if self.get_status() == self.Status.TERMINABLE:
             # 停止连续拍摄
             self.set_status(self.Status.UNAVAILABLE)
-            self.acquire_thread.terminating_signal.emit(AcquireThread.ClosureID.ACQUIRE_THREAD_2)
+            self.acquire_thread.terminating_signal.emit()
 
         # 如果状态为VANILLA，那么根据当前界面来决定执行
         if self.get_status() == self.Status.VANILLA:
+            self.set_status(self.Status.UNAVAILABLE)
             current_tab = self.components['mode_tab'].currentIndex()
-            if current_tab == TAB_XY_CONTINUOUS_NUM:
+            if current_tab == self.TAB_XY_CONTINUOUS_NUM:
                 # xy坐标横移连拍
-                self.xy_continuous_acquire()
+                self.xy_acquire()
 
-            if current_tab == TAB_SINGLE_POINT_NUM:
+            if current_tab == self.TAB_SINGLE_POINT_NUM:
                 # 单点连拍
-                self.single_point_acquire()
+                self.sp_acquire()
 
-    def xy_continuous_acquire(self):
+    def xy_acquire(self):
         # 清空进度条
         self.set_progress_bar_val(0)
-
-        # 禁用执行按钮
-        self.set_status(self.Status.UNAVAILABLE)
 
         # 当前使用相机id，从下拉菜单获取
         cam_name = self.components['camera_combo_box'].currentText()
@@ -620,12 +642,9 @@ class MainUI(QWidget):
         # 通过信号发送参数
         self.acquire_thread.xy_task_signal.emit(json.dumps(param_dict))
 
-    def single_point_acquire(self):
+    def sp_acquire(self):
         # 清空进度条
         self.set_progress_bar_val(0)
-
-        # 禁用执行按钮
-        self.set_status(self.Status.UNAVAILABLE)
 
         # 相机id
         cam_name = self.components['camera_combo_box'].currentText()
@@ -669,7 +688,7 @@ class MainUI(QWidget):
         self.acquire_thread.single_point_signal.emit(json.dumps(param_dict))
 
     def check_stick_on_top_slot(self, num: int):
-        flag = (num == CHECK_BOX_CHECKED)
+        flag = (num == self.CHECK_BOX_CHECKED)
         if flag:
             self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
             self.show()
@@ -678,7 +697,7 @@ class MainUI(QWidget):
             self.show()  # 必须重新显示窗口以使更改生效
 
     def check_program_output_slot(self, num: int):
-        flag = (num == CHECK_BOX_CHECKED)
+        flag = (num == self.CHECK_BOX_CHECKED)
         if flag:
             self.stick_resize(DEF_WIDTH_WITH_LOG, DEF_HEIGHT)
         else:
@@ -687,7 +706,7 @@ class MainUI(QWidget):
     def check_enable_extension_slot(self, num: int):
         """ XY界面，是否开启边界拓展拍摄 """
         # print(num)
-        flag = (num == CHECK_BOX_CHECKED)
+        flag = (num == self.CHECK_BOX_CHECKED)
         self.components['x_off'].setEnabled(flag)
         self.components['y_off'].setEnabled(flag)
         self.components['unit_combo'].setEnabled(flag)
@@ -710,18 +729,6 @@ class MainUI(QWidget):
     def get_status(self) -> Status:
         return self.exec_btn_status
 
-    def error(self, msg, on_confirm):
-        if on_confirm:
-            PopupDialog.error(self, msg, on_confirm)
-        else:
-            PopupDialog.error(self, msg)
-
-    def warning(self, msg, on_confirm):
-        if on_confirm:
-            PopupDialog.warning(self, msg, on_confirm)
-        else:
-            PopupDialog.warning(self, msg)
-
     # 固定窗口尺寸并且重新渲染
     def stick_resize(self, width: int, height: int):
         self.setMaximumSize(width, height)
@@ -743,10 +750,11 @@ class MainUI(QWidget):
             self.program_output_cache.append(before_line + msg + '<br/>' * blank)
         else:
             self.program_output_cache.append(msg + '<br/>' * blank)
+
         text = ''
-        for line in self.program_output_cache:
+        for ui_line in self.program_output_cache:
             # 两次换行
-            text += line
+            text += ui_line
         self.components['program_output_text'].setText(text)
         # 滚动到最底部
         (self.components['program_output_text'].verticalScrollBar()
@@ -758,6 +766,7 @@ class Aware:
     兴趣接口，对于所有TaskThread线程子类，可以通过继承Aware下某个具体的接口，来实现创建过程中实例的注入
     注意注入过程发生在thread_init方法执行之后
     """
+
     class MainUI:
         def aware_main_ui(self, main_ui: MainUI):
             pass
@@ -785,18 +794,22 @@ class AcquireThread(MainUI.TaskThread, Aware.MainUI):
     # 执行定点连拍需要用到的信号，信号接收json数据，调用handle_single_point_acquire
     single_point_signal = pyqtSignal(str)
 
-    # 终止连拍信号，需要提供线程id，目前一共存在两条可能开启线程，1：XY横纵坐标平移连拍线程，2：单点连拍线程
-    terminating_signal = pyqtSignal(ClosureID)
+    # 终止连拍信号，传递信号后该任务线程会终止所有正在运行的任务
+    terminating_signal = pyqtSignal()
 
     # def __init__(self, prog_signal, log_signal, resume_signal, img_signal):
     def __init__(self):
         super().__init__()
 
         # 闭包容器，每一个闭包线程需要存在自己的线程id
-        self.closures = {}
+        self.closures: dict[AcquireThread.ClosureID, None] = {}
+
+        # 初始化闭包任务，避免空指针异常
+        for closure_id in self.ClosureID:
+            self.closures[closure_id] = None
 
         # 创建线程池，用于提交拍摄任务，定义默认线程数为5
-        self.pool = ThreadPoolExecutor(max_workers=DEF_MULTI_THREAD_NUM)
+        self.pool = ThreadPoolExecutor(max_workers=cfg['multi_thread_num'])
 
     def aware_main_ui(self, main_ui: MainUI):
         # 获取main_ui用于打印弹窗
@@ -806,25 +819,32 @@ class AcquireThread(MainUI.TaskThread, Aware.MainUI):
         self.log_signal = self.main_ui.log_signal  # 通过日志信号向控制台输出信息
         self.status_signal = self.main_ui.status_signal  # 通过恢复信号，在适当的时候恢复主执行按钮
         self.img_signal = self.main_ui.img_signal  # 图像信号，用于在获取图像完成后返回图像
-        self.error_signal = self.main_ui.error_signal  # 错误弹窗信号
         self.schedule_signal = self.main_ui.schedule_signal  # 定时任务信号
 
     def thread_close(self) -> bool:
-        # todo: 完善拍摄线程退出逻辑，现在直接退出仍旧会报错，应该在退出之前尝试停止线程
-        if self.closures:
-            cfg_dialog = QMessageBox()
-            cfg_dialog.setFont(DEF_FONT)
-            cfg_dialog.setIcon(QMessageBox.Question)
-            cfg_dialog.setText("Do you want to confirm?")
-            cfg_dialog.setWindowTitle("Confirmation Dialog")
-            cfg_dialog.setStandardButtons(QMessageBox.Ok | QMessageBox.Cancel)
+        flag = False
+        for closure_id in self.ClosureID:
+            if self.closures[closure_id] is not None:
+                flag = True
 
-            button_clicked = cfg_dialog.exec_()
-            if button_clicked == QMessageBox.Ok:
-                print("User clicked OK")
+        if flag:
+            dialog = QMessageFactory.create_box()
+            dialog.setWindowTitle("Undone Task")
+            dialog.setStandardButtons(QMessageBox.Yes | QMessageBox.Cancel)
+
+            # XY轴横移拍摄线程未结束 或 单区域连续拍摄任务未结束
+
+            text = '<br/>'.join(textwrap.wrap('A Running Task has not finished yet, '
+                                              'do you want to stop the task and exit?', DEF_MESSAGE_BOX_TEXT_LEN))
+            dialog.setText(text)
+
+            dialog.setIcon(QMessageBox.Warning)
+            button_clicked = dialog.exec_()
+
+            if button_clicked == QMessageBox.Yes:
                 return True
             else:
-                print("User clicked Cancel")
+                # 线程拒绝退出
                 return False
 
         return True
@@ -832,24 +852,22 @@ class AcquireThread(MainUI.TaskThread, Aware.MainUI):
     def print_log(self, msg: str, prefix: bool = True, blank: int = 2):
         self.log_signal.emit(msg, prefix, blank)
 
-    def terminating_thread(self, closure_id: ClosureID):
+    def terminating_thread(self):
         """
-        通过传入的线程id来终止某个对应的线程
+        通过传入的线程id来终止所有线程
         :return: 无返回值，通过等待线程发送线程完成关闭信号来确认线程已经关闭
         """
-        # self.print_log(f'<span style="color: {LogColor.ALERT}">Terminating thread...</span>')
-        if not self.closures[closure_id]:
-            return
+        for closure_id in self.ClosureID:
+            if self.closures[closure_id]:
+                logger.debug('Terminating thread %s' % closure_id)
+                self.status_signal.emit(MainUI.Status.UNAVAILABLE)
+                for e_index, element in enumerate(self.closures[closure_id].__closure__):
+                    # print(e_index, type(element.cell_contents))
+                    if type(element.cell_contents) is list:
+                        is_terminated = self.closures[closure_id].__closure__[e_index].cell_contents
+                        is_terminated[0] = True
 
-        self.status_signal.emit(MainUI.Status.UNAVAILABLE)
-        for e_index, element in enumerate(self.closures[closure_id].__closure__):
-            # print(e_index, type(element.cell_contents))
-            if type(element.cell_contents) is list:
-                is_terminated = self.closures[closure_id].__closure__[e_index].cell_contents
-                is_terminated[0] = True
-
-
-    def single_point_acquire(self, param_json: str):
+    def sp_acquire(self, param_json: str):
         """
         执行单点连拍功能
         :param param_json: 拍摄参数，以json形式传输，包含参数如下：
@@ -876,32 +894,40 @@ class AcquireThread(MainUI.TaskThread, Aware.MainUI):
             x_bin = int(param["x_bin"])
             y_bin = int(param["y_bin"])
 
-            self.print_log(f'<span style="color: #1ba035; font-weight: bold">SINGLE POINT</span><br/>' +
-                           f'cam_id          : {cam_id}<br/>' +
-                           f'positions       : <br/>{positions}<br/>' +
-                           f'enable_duration : {enable_duration}<br/>' +
-                           f'duration_value  : {duration_value}<br/>' +
-                           f'extension_unit  : {duration_unit}<br/>' +
-                           f'framerate       : {framerate}<br/>' +
-                           f'exposure        : {exposure}<br/>' +
-                           f'x_bin           : {x_bin}<br/>' +
-                           f'y_bin           : {y_bin}')
+            logging = [f'<span style="color: #1ba035; font-weight: bold">SINGLE POINT</span>',
+                       f'cam_id          : {cam_id}',
+                       f'positions       : <br/>{positions}',
+                       f'enable_duration : {enable_duration}',
+                       f'duration_value  : {duration_value}',
+                       f'extension_unit  : {duration_unit}',
+                       f'framerate       : {framerate}',
+                       f'exposure        : {exposure}',
+                       f'x_bin           : {x_bin}',
+                       f'y_bin           : {y_bin}']
+            self.print_log('<br/>.'.join(logging))
+            logging[0] = 'SINGLE POINT'
+            logging[2] = f'positions       : {positions}'
+            for line in logging:
+                logger.debug(line)
+
+
 
             # index代表策略，0：并行执行单点连拍，1表示串行执行单点连拍
             self.closures[self.ClosureID.ACQUIRE_THREAD_2] = (
-                self.create_single_acquire_strategy(cam_id=cam_id, positions=positions, enable_duration=enable_duration,
-                                                    duration_value=duration_value, duration_unit=duration_unit,
-                                                    framerate=framerate, exposure=exposure, x_bin=x_bin, y_bin=y_bin,
-                                                    index=0))
+                self.create_sp_acquire_closure(cam_id=cam_id, positions=positions, enable_duration=enable_duration,
+                                               duration_value=duration_value, duration_unit=duration_unit,
+                                               framerate=framerate, exposure=exposure, x_bin=x_bin, y_bin=y_bin,
+                                               index=0))
 
             Thread(target=self.closures[self.ClosureID.ACQUIRE_THREAD_2]).start()
 
         except Exception as e:
             msg = f'<span style="color: {LogColor.WARNING}; font-weight: bold">Exception Occur:<br/>{e}</span>'
             self.print_log(msg)
-            self.error_signal.emit(msg, None)
+            # 打印日志
+            QMessageFactory.message(msg).exec_()
 
-    def create_single_acquire_strategy(self, **kwargs):
+    def create_sp_acquire_closure(self, **kwargs):
         # 执行单点连拍业务逻辑
         # 执行初始化工作
         cam_id = kwargs['cam_id']
@@ -954,7 +980,7 @@ class AcquireThread(MainUI.TaskThread, Aware.MainUI):
             if duration != -1:
                 self.print_log(
                     f'program will stop in <br/><span style="color: {LogColor.ALERT}">'
-                    f'{duration_value} {DEF_DURATION_UNIT_LIST[duration_unit]}</span>',
+                    f'{duration_value} {MainUI.DEF_DURATION_UNIT_LIST[duration_unit]}</span>',
                     False, 1)
 
                 # 终止线程
@@ -988,12 +1014,12 @@ class AcquireThread(MainUI.TaskThread, Aware.MainUI):
             self.print_log('cost: {:.2f} s'.format(float(time.perf_counter()) - start), False, 2)
             self.status_signal.emit(MainUI.Status.VANILLA)
             # 将闭包移除
-            self.closures.pop(self.ClosureID.ACQUIRE_THREAD_2)
+            self.closures[self.ClosureID.ACQUIRE_THREAD_2] = None
 
         closures = [single_thread_run]
         return closures[index]
 
-    def xy_continuous_acquire(self, param_json: str):
+    def xy_acquire(self, param_json: str):
         """
         处理xy轴横纵向移动连拍功能
         :parse param_json: 拍摄参数，以json形式传输，包含参数：
@@ -1006,34 +1032,37 @@ class AcquireThread(MainUI.TaskThread, Aware.MainUI):
                x_bin, y_bin:     方向binning
         :return: 返回图像列表，目前使用假数据代替
         """
-        parse: dict = json.loads(param_json)
-
-        cam_id = int(parse["cam_id"])
-        x_split = int(parse["x_split"])
-        y_split = int(parse["y_split"])
-        enable_extension = bool(parse["enable_extension"])
-        x_off = int(parse["x_off"])
-        y_off = int(parse['y_off'])
-        extension_unit = parse["extension_unit"]
-        exposure = int(parse["exposure"])
-        x_bin = int(parse["x_bin"])
-        y_bin = int(parse["y_bin"])
-
-        self.print_log(f'<span style="color: #1ba035; font-weight: bold">XY CONTINUOUS</span><br/>' +
-                       f'cam_id          : {cam_id}<br/>' +
-                       f'enable_extension: {enable_extension}<br/>' +
-                       f'x_off           : {x_off}<br/>' +
-                       f'y_off           : {y_off}<br/>' +
-                       f'extension_unit  : {extension_unit}<br/>' +
-                       f'exposure        : {exposure}<br/>' +
-                       f'x_bin           : {x_bin}<br/>' +
-                       f'y_bin           : {y_bin}<br/>' +
-                       f'x_split         : {x_split}<br/>' +
-                       f'y_split         : {y_split}')
-
-        # # index为策略，1为并行策略，2为串行策略，3为切割策略（未实现）
         try:
+            parse: dict = json.loads(param_json)
 
+            cam_id = int(parse["cam_id"])
+            x_split = int(parse["x_split"])
+            y_split = int(parse["y_split"])
+            enable_extension = bool(parse["enable_extension"])
+            x_off = int(parse["x_off"])
+            y_off = int(parse['y_off'])
+            extension_unit = parse["extension_unit"]
+            exposure = int(parse["exposure"])
+            x_bin = int(parse["x_bin"])
+            y_bin = int(parse["y_bin"])
+
+            logging = [f'<span style="color: #1ba035; font-weight: bold">XY CONTINUOUS</span>',
+                       f'cam_id          : {cam_id}',
+                       f'enable_extension: {enable_extension}',
+                       f'x_off           : {x_off}',
+                       f'y_off           : {y_off}',
+                       f'extension_unit  : {extension_unit}',
+                       f'exposure        : {exposure}',
+                       f'x_bin           : {x_bin}',
+                       f'y_bin           : {y_bin}',
+                       f'x_split         : {x_split}',
+                       f'y_split         : {y_split}']
+            self.print_log('<br/>'.join(logging))
+            logging[0] = 'XY CONTINUOUS'
+            for line in logging:
+                logger.debug(line)
+
+            # index为策略，1为并行策略，2为串行策略，3为切割策略（未实现）
             self.closures[self.ClosureID.ACQUIRE_THREAD_1] = (
                 self.create_xy_acquire_closure(cam_id=cam_id, x_split=x_split, y_split=y_split,
                                                enable_extension=enable_extension,
@@ -1046,7 +1075,8 @@ class AcquireThread(MainUI.TaskThread, Aware.MainUI):
         except Exception as e:
             msg = f'<span style="color: {LogColor.WARNING}; font-weight: bold">Exception Occur:<br/>{e}</span>'
             self.print_log(msg)
-            self.error_signal.emit(msg, None)
+            # 打印日志
+            QMessageFactory.message(msg).exec_()
 
     # 可以切换策略执行
     def create_xy_acquire_closure(self, **kwargs):
@@ -1120,16 +1150,18 @@ class AcquireThread(MainUI.TaskThread, Aware.MainUI):
                 positions.append([top, left, bottom, right])
 
         # 检查坐标添加情况
-        msg = f'<span style="color: {LogColor.ALERT}; font-weight: bold">Acquire Positions:</span><br/>'
-        for i, pos in enumerate(positions):
-            if i != len(positions):
-                msg += f'{pos},<br/>'
-            else:
-                msg += f'{pos}'
-        self.print_log(msg)
+        # msg = f'<span style="color: {LogColor.ALERT}; font-weight: bold">Acquire Positions:</span><br/>'
+        # for i, pos in enumerate(positions):
+        #     if i != len(positions):
+        #         msg += f'{pos},<br/>'
+        #     else:
+        #         msg += f'{pos}'
+        # self.print_log(msg)
 
         # 通过坐标列表构建任务添加到线程池当中
         # 用于暂停程序的执行一段时间。然而，在PyQt应用中，直接使用time.sleep会导致应用程序的界面无法响应，因为它会阻塞主线程
+        # 线程执行钩子，可以用于停止线程
+        is_terminated = [False]
 
         # 定义闭包函数用于创建线程执行
         def multi_thread_run():
@@ -1146,7 +1178,15 @@ class AcquireThread(MainUI.TaskThread, Aware.MainUI):
             # 在此处阻塞等待线程完成任务
             img_dict = {}
             self.print_log('Collecting result:', True, 1)
+
+            # 更改按钮样式，支持线程终止
+            self.status_signal.emit(MainUI.Status.TERMINABLE)
+
             for completed_future in concurrent.futures.as_completed(futures):
+                # 开始执行前判断是否线程被中断
+                if is_terminated[0]:
+                    break
+
                 self.print_log(f'done index: {futures[completed_future]}', False, 1)
                 # 构建返回值
                 img_dict[futures[completed_future]] = completed_future.result()
@@ -1160,12 +1200,13 @@ class AcquireThread(MainUI.TaskThread, Aware.MainUI):
             self.print_log(f'<span style="color: {LogColor.SAFE}">Complete Task</span>', True, 1)
             self.print_log('cost: {:.2f} s'.format(float(time.perf_counter()) - start), False, 2)
 
-            # 任务完成后，将进度条置于100%
-            self.prog_signal.emit(100)
+            # 任务完成后，将进度条置于100%，如果为强制终止线程，那么进度条不应该置于100%
+            if not is_terminated[0]:
+                self.prog_signal.emit(100)
             # 恢复执行按钮可用
             self.status_signal.emit(MainUI.Status.VANILLA)
             # 解除闭包引用
-            self.closure_1 = None
+            self.closures[self.ClosureID.ACQUIRE_THREAD_1] = None
 
         def single_thread_run():
             """ ========== 单线程策略 ========== """
@@ -1193,7 +1234,7 @@ class AcquireThread(MainUI.TaskThread, Aware.MainUI):
             # 恢复执行按钮可用
             self.status_signal.emit(MainUI.Status.VANILLA)
             # 解除闭包引用
-            self.closure_1 = None
+            self.closures[self.ClosureID.ACQUIRE_THREAD_1] = None
 
         def single_splitting_run():
             # 单次拍摄后执行切割获得结果
@@ -1215,118 +1256,51 @@ class LogColor:
     SAFE = '#0067a6'
 
 
-class PopupDialog(QDialog):
+class QMessageFactory:
     """
-    弹窗类，同时作为弹窗工厂，产生弹窗对象
+    弹窗工厂，提供基本弹窗对象，同时作为弹窗工厂，产生弹窗对象
     """
 
     @staticmethod
-    def dummy():
-        pass
+    def create_box() -> QMessageBox:
+        """
+        创建基本对话框窗体，可以使用这个方法来构建基础对话框，然后在此之上添加元素
+        如果需要快速构建某一类弹窗，那么可以使用下面提供的工厂方法来快速构建
+        :return:
+        """
+        box = QMessageBox()
+        box.setFont(DEF_FONT)
+        return box
 
     @staticmethod
-    def warning(parent, msg, on_confirm=dummy):
-        WarningDialog(parent, msg, on_confirm).show()
+    def confirm(msg, title='Warning', no_icon=False) -> QMessageBox:
+        """ 警告弹窗，包含确定和取消按钮 """
+        box = QMessageFactory.create_box()
+        box.setWindowTitle(title)
+
+        # 实现自动换行
+        textwrap.wrap(msg, DEF_MESSAGE_BOX_TEXT_LEN)
+        box.setText(msg.join('<br/>'))
+
+        if not no_icon:
+            box.setIcon(QMessageBox.Warning)
+        box.setStandardButtons(QMessageBox.Yes | QMessageBox.Cancel)
+        return box
 
     @staticmethod
-    def message(parent, msg, on_confirm=dummy):
-        MessageDialog(parent, msg, on_confirm).show()
+    def message(msg, title='Message', no_icon=False) -> QMessageBox:
+        """ 普通消息弹窗，包含确认按钮 """
+        box = QMessageFactory.create_box()
+        box.setWindowTitle(title)
 
-    @staticmethod
-    def confirm(parent, msg, on_ok=dummy, on_cancel=dummy):
-        ConfirmDialog(parent, msg, on_ok, on_cancel).show()
+        # 实现自动换行
+        textwrap.wrap(msg, DEF_MESSAGE_BOX_TEXT_LEN)
+        box.setText(msg.join('<br/>'))
 
-    @staticmethod
-    def error(parent, msg, on_confirm=dummy):
-        ErrorDialog(parent, msg, on_confirm).show()
-
-    def __init__(self, parent, msg, title: str):
-        super().__init__(parent)
-        self.setFont(DEF_FONT)
-        self.setMinimumSize(DEF_POPUP_WIDTH, DEF_POPUP_HEIGHT)
-        self.setMaximumSize(DEF_POPUP_WIDTH, DEF_POPUP_HEIGHT)
-        self.setWindowTitle(title)
-
-        # 初始化ui，初始化总容器
-        self.container = QVBoxLayout()
-        self.container.setContentsMargins(0, 8, 0, 7)
-
-        # 消息窗体容器
-        self.msg_container = QHBoxLayout()
-        self.msg_container.setContentsMargins(15, 0, 15, 0)
-        self.container.addLayout(self.msg_container)
-
-        self.msg_edit = QLabel()
-        # 启用自动换行
-        self.msg_edit.setWordWrap(True)
-        self.msg_edit.setAlignment(Qt.AlignCenter)
-        self.msg_edit.setText(msg)
-        self.msg_container.addWidget(self.msg_edit)
-
-        # 按钮窗体容器
-        self.btn_container = QHBoxLayout()
-        self.btn_container.setContentsMargins(15, 0, 15, 0)
-        self.container.addLayout(self.btn_container)
-
-        self.setLayout(self.container)
-
-
-# 警告样式弹窗
-
-
-class WarningDialog(PopupDialog):
-    # on_confirm函数会在弹窗确认按钮被点击之后触发
-    def __init__(self, parent, msg, on_confirm, title='warning'):
-        super().__init__(parent, msg, title)
-        self.on_confirm = on_confirm
-        # 初始化ui
-
-        self.confirm_btn = QPushButton('confirm')
-        self.btn_container.addStretch()
-        self.btn_container.addWidget(self.confirm_btn)
-        self.btn_container.addStretch()
-
-        self.connect()
-
-    def connect(self):
-        self.confirm_btn.clicked.connect(self.close)
-        self.confirm_btn.clicked.connect(self.on_confirm)
-
-
-class MessageDialog(WarningDialog):
-    def __init__(self, parent, msg, on_confirm, title='Message'):
-        super().__init__(parent, msg, on_confirm, title)
-
-
-class ErrorDialog(WarningDialog):
-    def __init__(self, parent, msg, on_confirm, title='Error'):
-        super().__init__(parent, msg, on_confirm, title)
-
-
-class ConfirmDialog(PopupDialog):
-    def __init__(self, parent, msg, on_ok, on_cancel, title='Confirm'):
-        super().__init__(parent, msg, title)
-        # 确认和取消按钮
-        self.on_ok = on_ok
-        self.on_cancel = on_cancel
-        # 初始化ui
-        self.ok_btn = QPushButton('ok')
-        self.cancel_btn = QPushButton('cancel')
-        self.btn_container.addStretch()
-        self.btn_container.addWidget(self.ok_btn)
-        self.btn_container.addWidget(self.cancel_btn)
-        self.btn_container.addStretch()
-
-        self.connect()
-
-    def connect(self):
-        self.ok_btn.clicked.connect(self.close)
-        self.ok_btn.clicked.connect(self.on_ok)
-        self.cancel_btn.clicked.connect(self.close)
-        self.cancel_btn.clicked.connect(self.on_cancel)
-
-
-# 主界面类
+        if not no_icon:
+            box.setIcon(QMessageBox.Information)
+        box.setStandardButtons(QMessageBox.Ok)
+        return box
 
 
 class MathUtil:
