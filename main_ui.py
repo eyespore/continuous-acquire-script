@@ -2,8 +2,6 @@
 Created on 2024.4.9
 @author: Pineclone
 @version: 0.2.5
-
-主执行脚本
 """
 __version__ = '0.2.5'
 
@@ -28,16 +26,17 @@ from PyQt5.QtGui import QIntValidator, QFont
 from PyQt5.QtWidgets import *
 from loguru import logger
 
+
 logger.info(f'Launching ContinuousAcquireScripts, current version: {__version__}')
 
 # 修正窗口界面尺寸
 QtCore.QCoreApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling)
 
 # 项目根目录路径设置
-ROOT_DIR = 'D:/Desktop/Note/Python/Python_Demos/ContinuousAcquireScripts'
+ROOT_DIR = '.'
 
 # 菜单UI路径设定
-MENU_UI_PATH = f'{ROOT_DIR}/ui/ContinuousAcquireMenu.ui'
+MENU_UI_PATH = f'{ROOT_DIR}/main.ui'
 
 # yaml配置文件路径设定
 CONFIG_PATH = f'{ROOT_DIR}/config.yaml'
@@ -339,7 +338,7 @@ class MainUI(QWidget):
         self.init_signals()
 
         self.print_log(f'<span style="color: {LogColor.SAFE}; font-weight:bold">successfully launch menu</span>')
-        logger.info('Successfully launch Main UI')
+        logger.info('Successfully launch Main UI, Waiting for executing commands...')
 
     """
     =============================================================
@@ -578,8 +577,6 @@ class MainUI(QWidget):
         """
         if self.get_status() == self.Status.UNAVAILABLE:
             return
-
-
 
         # 首先查询当前运行模式
         if self.get_status() == self.Status.TERMINABLE:
@@ -909,8 +906,6 @@ class AcquireThread(MainUI.TaskThread, Aware.MainUI):
             logging[2] = f'positions       : {positions}'
             for line in logging:
                 logger.debug(line)
-
-
 
             # index代表策略，0：并行执行单点连拍，1表示串行执行单点连拍
             self.closures[self.ClosureID.ACQUIRE_THREAD_2] = (
