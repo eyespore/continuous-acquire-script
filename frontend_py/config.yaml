@@ -1,4 +1,8 @@
-acquire:
+ui: # gui参数设定
+  nor:
+    font: consolas  # 默认字体
+    font_size: 8  # 默认字体大小
+    enable_log: True  # 是否启用日志输出窗口
   xy: # XY轴连续拍摄默认值
     exposure: 1200  # 曝光
     x_bin: 2
@@ -11,8 +15,6 @@ acquire:
     y_splitting_format: 2
     multi_thread_num: 5  # 拍摄时线程、进程池中线程、进程数
     multi_process_num: 5
-
-
   sp: # 单点连续拍摄默认参数设置
     pos_for_sp: # 默认坐标参数，从上到下依次是top,left,bottom,right
       - 0
@@ -23,9 +25,3 @@ acquire:
     duration_value: 10  # 默认持续时间
     duration_unit: 1  # 持续连拍默认采用时间单位
     framerate: 10  # 默认帧率
-
-ui: # gui参数设定
-  main:
-    font: consolas  # 默认字体
-    font_size: 8  # 默认字体大小
-    enable_log: True  # 是否启用日志输出窗口
