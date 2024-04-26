@@ -3,5 +3,7 @@ path:
   backend_config: D:/Desktop/Note/Python/Python_Projects/continuous_acquire-main/backend/config.properties
 server:
   # 监听端口号和地址
-  ip: 127.0.0.1
+  host: 127.0.0.1
   port: 25565
+  # 超时时间，设置过长会导致程序难以退出
+  timeout: 3
