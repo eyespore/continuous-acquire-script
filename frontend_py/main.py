@@ -1,9 +1,7 @@
 """
 Created on 2024.4.9
 @author: Pineclone
-@version: 0.2.5
 """
-__version__ = '0.2.5'
 
 import concurrent.futures
 import json
@@ -26,7 +24,7 @@ from PyQt5.QtGui import QIntValidator, QFont
 from PyQt5.QtWidgets import *
 from loguru import logger
 
-logger.info(f'Launching frontend process by python, current version: {__version__}')
+logger.info(f'Launching frontend process by python')
 
 # 修正窗口界面尺寸
 QtCore.QCoreApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling)

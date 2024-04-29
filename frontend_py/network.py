@@ -1,4 +1,9 @@
-import socket
+"""
+Created on 2024.4.30
+@author: Pineclone
+@version: 0.0.1
+网络组件
+"""
 
 from loguru import logger
 
@@ -16,11 +21,10 @@ class Message:
         self.code = -1
         self.name = 'NotFound'
         self.body = 'Nil'
-        self.address = ()
+        self.address = ('127.0.0.1', 25565)
 
     def __str__(self):
         return (
-            f"ip: {self} \n"
             f"body: {self.body} \n"
             f"code: {self.code}\n"
             f"name: {self.name} \n"
@@ -145,7 +149,9 @@ class Message:
                 split.append(line[:pos])
                 line = line[pos + 1:]
             split.append(line)
-            address = (split[0], split[1])
+            host = split[0].split(':')[0]
+            port = int(split[0].split(':')[1])
+            address = (host, port)
             # message = Message(name=split[1], code=split[2], body=split[3])
             message = Message()
             message.setAddress(address)

@@ -4,7 +4,6 @@ Created on 2024.4.24
 @version: 0.0.1
 主要是为后端提供socket连接适配，创建中间件线程接收前端数据，处理之后将数据转发到后端程序，
 """
-__version__ = '0.0.1'
 
 import cmd
 import os
@@ -17,10 +16,11 @@ from collections import defaultdict
 import yaml
 from loguru import logger
 
+from network import Message
 from middleware_py.properties import Properties
 
 # 配置日志输出等级
-logger.info(f'Launching MQ process by python, current version: {__version__}')
+logger.info(f'Launching MQ process by python')
 
 # 配置文件初始化
 ROOT_DIR = '.'  # 项目根路径
@@ -44,8 +44,50 @@ response_mq = queue.Queue()
 
 # 连接队列，通过connection_handler处理之后产生的连接对象会被存储在此处
 connection_cache = queue.Queue()
+
 # 连接处理线程追踪器，为二维字典，以address作为键名，connection连接以及connection_thread作为键值
-connection_tracker = defaultdict(dict)
+# 弃用原连接追踪，采用线程安全的连接追踪
+# connection_tracker = defaultdict(dict)
+
+
+class connection_context_manager:
+    """
+    连接上下文管理，提供了线程安全地方式来集中管理连接，管理由socket创建的connection连接对象以及由此
+    衍生出的连接处理器线程，在程序退出时上下文管理器能够负责处理所有连接处理器线程的正确退出
+    """
+    connection_tracker = defaultdict(dict)
+    lock = threading.Lock()
+
+    # 添加一个新的连接上下文
+    def add(self, **kwargs):
+        self.lock.acquire()
+        self.connection_tracker[kwargs['address']]['connection'] = kwargs['connection']
+        self.connection_tracker[kwargs['address']]['connection_handler_thread'] = kwargs['connection_handler_thread']
+        self.lock.release()
+
+    # 移除一个连接上下文
+    def remove(self, address: tuple):
+        self.lock.acquire()
+        self.connection_tracker.pop(address)
+        self.lock.release()
+
+    def block_and_wait(self):
+        for address, connection_bundle in self.connection_tracker.items():
+            try:
+                connection_bundle['connection_handler_thread'].join()
+            except KeyError as e:
+                logger.error(f'Hit Nonexistent Key : {address[0]}:{address[1]}')
+
+    # 通过地址元组获取映射到的连接实例
+    def get(self, address: tuple):
+        self.lock.acquire()
+        to_return = self.connection_tracker[address]['connection']
+        self.lock.release()
+        return to_return
+
+
+# 连接上下文管理
+connection_context = connection_context_manager()
 
 # 中间件绑定ip地址
 server_host = yml_cfg['server']['host']
@@ -97,7 +139,7 @@ class connection_builder(threading.Thread):
             try:
                 connection, address = server.accept()
                 logger.info(f'Accept connection from {address[0]}:{address[1]}')
-                connection_tracker[address]['connection'] = connection
+                # connection_tracker[address]['connection'] = connection
                 # 将连接对象添加进入连接池
                 connection_cache.put((connection, address))
             except socket.timeout:
@@ -184,9 +226,12 @@ class backend_output_middleware(threading.Thread):
                 try:
                     read_pip = open(output_pip_path, 'r', encoding='utf-8')
                     for line in read_pip:
+
                         # 去皮
-                        line = line.strip()
-                        logger.debug(f"line from output pip : {line}")
+                        response_message = line.strip()
+                        logger.debug(f"line from output pip : {response_message}")
+                        # 将内容写入响应队列
+                        response_mq.put(response_message)
 
                 except FileNotFoundError as e:
                     logger.error(f'could not open pip file with given path : {output_pip_path}')
@@ -218,7 +263,7 @@ class frontend_output_middleware(threading.Thread):
 
     """
     def run(self):
-        logger.debug('Frontend-Input-Middleware interface launched')
+        logger.debug('Frontend-Output-Middleware interface launched')
 
         # 从连接缓冲区获取连接对象
         global is_terminated
@@ -228,13 +273,21 @@ class frontend_output_middleware(threading.Thread):
                 connection, address = connection_cache.get(timeout=timeout)
                 connection.settimeout(timeout)
                 connection_thread = threading.Thread(target=self.handle_connection, args=(connection, address))
+
+                # 已弃用
                 # 将处理线程添加进入线程池中
-                connection_tracker[address]['connection_thread'] = connection_thread
+                # connection_tracker[address]['connection_thread'] = connection_thread
+
+                # 将连接构建成上下文交由连接上下文管理
+                connection_context.add(address=address,
+                                       connection=connection,
+                                       connection_handler_thread=connection_thread)
+
                 connection_thread.start()
             except queue.Empty:
                 if is_terminated:
                     break
-        logger.debug('Frontend-Input-Middleware interface shutdown')
+        logger.debug('Frontend-Output-Middleware interface shutdown')
 
     def handle_connection(self, connection, address):
         """
@@ -272,13 +325,22 @@ class frontend_output_middleware(threading.Thread):
             except socket.timeout as e:
                 if is_terminated:
                     connection.close()
+                    # 在连接上下文中取消追踪当前连接上下文
+                    connection_context.remove(address)
+
                     logger.debug(f'Connection timeout : {address[0]}:{address[1]}')
                     return
+            except ConnectionResetError as e:
+                # 在连接上下文中取消追踪当前连接上下文
+                connection_context.remove(address)
+                # logger.debug(f'远程主机强迫关闭了一个现有的连接 : {address[0]}:{address[1]}')
+                logger.debug(f'Detected host force to terminating an existed connection : {address[0]}:{address[1]}')
+                return
 
         # 用户线程退出，关闭连接
         connection.close()
-        # 不再追踪该地址信息
-        connection_tracker.pop(address)
+        # 在连接上下文中取消追踪当前连接上下文
+        connection_context.remove(address)
         logger.debug(f'Connection close : {address[0]}:{address[1]}')
 
 
@@ -293,8 +355,41 @@ class frontend_input_middleware(threading.Thread):
     """
 
     def run(self):
-        logger.debug('Frontend-Output-Middleware interface launched')
-        ...
+        logger.debug('Frontend-Input-Middleware interface launched')
+        while not is_terminated:
+            try:
+                # 从请求消息缓存队列获取消息并加入列表
+                item: str = response_mq.get(timeout=timeout)
+                # 将消息转化为Message格式，然后通过连接对象发送给前端
+                response_message = Message.from_backend_output(item)
+                # logger.debug(f'Response message : {response_message}')
+
+                # 已弃用
+                # 从连接池中获取连接对象，通过键connection获取连接对象
+                # connection = connection_tracker[response_message.getAddress()]['connection']
+
+                connection = connection_context.get(response_message.getAddress())
+
+                # 编码对象
+                data = pickle.dumps(response_message, protocol=pickle.HIGHEST_PROTOCOL)
+                length = len(data).to_bytes(4, byteorder='big')
+
+                # 发送数据长度
+                connection.sendall(length)
+                # 发送数据
+                connection.sendall(data)
+
+            except queue.Empty:
+                # 超时退出
+                if is_terminated:
+                    break
+            except KeyError as e:
+                # 过程中无法找到某个connection实例，通常是实例在过程中被清除
+                logger.error('Hit Nonexistent Key Exception')
+                continue
+
+        # 线程退出
+        logger.debug('Frontend-Input-Middleware interface shutdown')
 
 
 class middleware_cmd(cmd.Cmd):
@@ -343,8 +438,13 @@ class middleware_cmd(cmd.Cmd):
         self.interface_4.join()
 
         # 等待所有连接线程退出
-        for address, connection_bundle in connection_tracker.items():
-            connection_bundle['connection_thread'].join()
+        # for address, connection_bundle in connection_tracker.items():
+        #     try:
+        #         connection_bundle['connection_thread'].join()
+        #     except KeyError as e:
+        #         logger.debug('')
+
+        connection_context.block_and_wait()
 
         logger.info('Middleware successfully shutdown')
         return True

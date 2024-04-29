@@ -25,3 +25,9 @@ ui: # gui参数设定
     duration_value: 10  # 默认持续时间
     duration_unit: 1  # 持续连拍默认采用时间单位
     framerate: 10  # 默认帧率
+server:
+  # 连接目标端口号和地址
+  host: 127.0.0.1
+  port: 25565
+  # 超时时间，设置过长会导致程序难以退出
+  timeout: 3

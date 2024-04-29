@@ -46,8 +46,7 @@ Class TGFacade : object
 }
 
 ClearResults()
-string version = "0.1.0"
-Result(GetTime(1) + "| DEBUG    |<main>:34 - Launching DM Script Process, current version: " + version)
+Result(GetTime(1) + "| DEBUG    |<main>:34 - Launching DM Script Process")
 
 object logger = alloc(Logger).init("main")  // 日志
 taggroup config_tg = NewTagGroup()  // 配置
@@ -526,7 +525,9 @@ class TaskThread : thread
                 }
                 catch
                 {
-                    Logger.debug(377, "TaskThread: Unsupported operation name")
+                    // 如果没有找到操作名，引导至NotFound
+                    Logger.debug(377, "TaskThread: Unsupported operation name, lead to NotFound")
+                    number task_id = AddMainThreadSingleTask(dm_task_dispatcher, "NotFound", 0)
                     break
                 }
             }
@@ -759,7 +760,7 @@ class GUI : UIFrame
         else
         {
             ClearResults()
-            Result(GetTime(1) + "| DEBUG    |<main>:670 - Launching DM Script Process, current version: " + version)
+            Result(GetTime(1) + "| DEBUG    |<main>:670 - Launching DM Script Process")
             launch()  // 启动程序线程
 
             while (1) {
