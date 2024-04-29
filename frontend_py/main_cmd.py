@@ -6,8 +6,8 @@ import socket
 import pickle
 
 from loguru import logger
+from middleware_py.message import Message
 
-from mq_py.message import Message
 
 __version__ = '0.0.1'
 logger.info(f'Launching MainCMD program by python, current version: {__version__}')
@@ -52,7 +52,7 @@ class MainCmd(cmd.Cmd):
     prompt = '> '
 
     def do_send(self, line):
-        """send a Message to message queue"""
+        """ 通过字符串的形式发送消息，消息遵循 '[操作名]<空格>[请求体]' 的格式 """
         message = Message.from_frontend_output(line)
 
         # 编码对象

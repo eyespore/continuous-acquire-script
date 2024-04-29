@@ -27,17 +27,38 @@ class Logger : object
     }
 }
 
+Class TGFacade : object
+{
+    taggroup tg
+
+    object init(object self, taggroup tg_)
+    {
+        tg = tg_
+        return self
+    }
+
+    string get(object self, string key)
+{
+    string value
+        tg.TagGroupGetTagAsString(key, value)
+        return value
+    }
+}
+
 ClearResults()
 string version = "0.1.0"
 Result(GetTime(1) + "| DEBUG    |<main>:34 - Launching DM Script Process, current version: " + version)
 
 object logger = alloc(Logger).init("main")  // 日志
 taggroup config_tg = NewTagGroup()  // 配置
+object config = alloc(TGFacade).init(config_tg)  // 配置文件门户
 
 // 加载全局配置配置文件
-void initConfiguration() {
+void initConfiguration() 
+{
     string ROOT_DIR = "D:\\Desktop\\Note\\Python\\Python_Projects\\continuous_acquire-main\\backend"
     string CONFIG_PATH = ROOT_DIR + "\\config.properties"
+
     if ( ! DoesFileExist(CONFIG_PATH) )
         Throw( "Cannot Found Config File" )
 
@@ -75,27 +96,8 @@ void initConfiguration() {
     } recover {
         // 不论是否抛出异常，关闭文件流
         CloseFile(config_file)
-        // TODO: 排查文件流关闭隐患
     }
 }
-
-Class TGFacade
-{
-    taggroup tg
-
-    object init(object self, taggroup tg_) {
-        tg = tg_
-        return self
-    }
-
-    string get(object self, string key)
-{
-    string value
-        tg.TagGroupGetTagAsString(key, value)
-        return value
-    }
-}
-object config = alloc(TGFacade).init(config_tg)  // 配置文件门户
 
 initConfiguration()
 
@@ -103,6 +105,8 @@ initConfiguration()
 object request_mq = NewMessageQueue()
 // 响应消息队列
 object response_mq = NewMessageQueue()
+// 线程注册队列
+object thread_register_queue = NewMessageQueue()
 
 // ===========================================================================
 // 消息对象类，请求消息通过输入线程会被逐条封装成为任务实例，压入消息队列中
@@ -117,7 +121,8 @@ class Message : object
     string name  // 操作名
     string body  // 数据体
 
-    Message(object self) {
+    Message(object self)
+    {
         // 初始化返回码
         code = -1
     }
@@ -142,7 +147,7 @@ class Message : object
         body = body_
     }
 
-    void setCode(object self, number code_) 
+    void setCode(object self, number code_)
     {
         code = code_
     }
@@ -169,12 +174,83 @@ class Message : object
 
     string toString(object self)
     {
-        if (code != -1) {
+        if (code != -1)
+        {
             return address + ":" + port + " " + name + " " + code + " " + body
         }
         return address + ":" + port + " " + name + " " + body
     }
 }
+
+// 线程管理器注册事件
+class register_msg: object {
+	string option
+	
+	object init(object self, string option_) {
+		option = option_
+		return self
+	}
+	
+	string get_option(object self) {
+		return option
+	}
+
+}
+
+// ===========================================================================
+// 线程管理器，管理线程注册
+// ===========================================================================
+class ThreadManager : thread
+{
+    number current_thread_num
+    object inc_msg
+    object dec_msg
+    
+    object Init(object self)
+    {
+        // 初始化注册事件
+		inc_msg = alloc(register_msg).Init("increase")
+		dec_msg = alloc(register_msg).Init("decrease")
+        current_thread_num = 0
+        return self
+    }
+
+    void RunThread( object self ) 
+    {
+		while (1) {
+		    object option = thread_register_queue.WaitOnMessage(2, null)
+            if (option.ScriptObjectIsValid())
+            {
+			    string opt = option.get_option()
+                if (opt == "increase") {
+                    current_thread_num ++
+                } 
+                else if (opt == "decrease") 
+                {
+                    current_thread_num --
+			    }
+			}
+		}
+    }
+
+    number increase(object self)
+    {
+        thread_register_queue.PostMessage(inc_msg)
+    }
+
+    number decrease(object self)
+    {
+        thread_register_queue.PostMessage(dec_msg)
+    }
+
+    number count_thread_num(object self)
+    {
+        return current_thread_num
+    }
+}
+
+// 线程管理器
+object thread_manager = alloc(ThreadManager).Init()
 
 // ===========================================================================
 // 输入线程，负责创建和销毁输入管道文件，启动后定时从管道文件数据拉取数据到内存当中，
@@ -191,22 +267,13 @@ class InputThread : thread
 
     object init(object self)
     {
+        // 初始化属性
         is_terminated = 0
         input_pip_path = config.get("input_pip_path")
         input_pip_lock = config.get("input_pip_lock")
 
         // 用于快速创建消息对象
         request_message_prototype = alloc(Message)
-
-        // 创建输入管道文件
-        if (DoesFileExist(input_pip_path))
-            DeleteFile(input_pip_path)
-        CreateFile(input_pip_path)
-
-        // 创建输入管道锁文件
-        if (DoesFileExist(input_pip_lock))
-            DeleteFile(input_pip_lock)
-        CreateFile(input_pip_lock)
 
         return self
     }
@@ -280,11 +347,32 @@ class InputThread : thread
         number encoding = 0  // 系统默认字符集
         number input_pip  // 输入管道文件句柄
         object input_pip_stream = NULL  // 输入管道流
+        number input_pip_read_interval = config.get("input_pip_read_interval").val()  // 输入管道读线程读取间隔
+
+        // 创建输入管道文件
+        if (DoesFileExist(input_pip_path))
+            DeleteFile(input_pip_path)
+        CreateFile(input_pip_path)
+
+        // 创建输入管道锁文件
+        if (DoesFileExist(input_pip_lock))
+            DeleteFile(input_pip_lock)
+        CreateFile(input_pip_lock)
+
+        // 注册线程
+        thread_manager.increase()
+        Logger.debug(352, "InputThread done registered")
+
+        // 初始化线程状态量
+        is_terminated = 0
 
         // 消息线程主循环
         while (!is_terminated)
         {
-            if ( ! DoesFileExist(input_pip_lock)) {
+            // 降低读取管道的频率，避免造成异常
+            sleep(input_pip_read_interval)
+            if (!DoesFileExist(input_pip_lock))
+            {
                 // 如果锁文件被删除，那么读取管道消息
                 input_pip_stream = NULL
 
@@ -298,17 +386,22 @@ class InputThread : thread
                     }
                     catch
                     {
-                        Logger.debug(283, "Cannot create file stream, retry creating...")
+                        Logger.debug(313, "Cannot create file stream, retry creating...")
                         // 无法获取输入流，通常是由于外部写入数据造成
                         sleep(0.5)
                         break
                     }
 
+                    result ("is_terminate : " + is_terminated)
                     if (is_terminated) break
                 }
 
-                // 如果此时仍旧没有获取输入流，那么退出主循环
-                if (input_pip_stream == NULL) break
+                // 如果此时仍旧没有获取输入流，关闭文件流，并且退出主循环
+                if (input_pip_stream == NULL) 
+                {
+                    CloseFile(input_pip)
+                    break
+                }
 
                 // 读取输入管道数据
                 string line
@@ -318,7 +411,7 @@ class InputThread : thread
                     {
                         // 格式不正确时能够正确处理异常情况
                         object request_message = self.ConvertLine2Request(line)
-                        logger.debug(297, "InputThread: Accepted message : [" + request_message.toString() + "]")
+                        logger.debug(414, "InputThread: Accepted message : [" + request_message.toString() + "]")
                         // 将消息提交到队列
                         request_mq.PostMessage(request_message)
                     }
@@ -334,20 +427,23 @@ class InputThread : thread
                 // 关闭管道文件输入流，并且等待间隔
                 CloseFile(input_pip)
                 // 重新创建锁文件，避免循环读取文件内容
+                // result(input_pip_lock)
                 CreateFile(input_pip_lock)
             }
         }
 
         // 主循环结束，删除管道文件
-        Logger.debug(332, "InputThread: InputThread terminating, delete dm_in.pip file...")
+        Logger.debug(359, "InputThread: InputThread terminating, delete dm_in.pip file...")
         if (DoesFileExist(input_pip_path))
             DeleteFile(input_pip_path)
 
         // 删除锁文件
-        Logger.debug(337, "InputThread: InputThread terminating, delete dm_in.lock file...")
+        Logger.debug(364, "InputThread: InputThread terminating, delete dm_in.lock file...")
         if (DoesFileExist(input_pip_lock))
             DeleteFile(input_pip_lock)
 
+        // 注销线程
+        thread_manager.decrease()
         Logger.debug(327, "InputThread: InputThread terminated")
     }
 
@@ -405,13 +501,21 @@ class TaskThread : thread
 
     void RunThread(object self)
     {
+
+        // 注册线程
+        thread_manager.increase()
+        Logger.debug(510, "TaskThread done registered")
+
+        // 初始化线程状态量
+        is_terminated = 0
+
         while (!is_terminated)
         {
             object request_message = request_mq.WaitOnMessage(2, null)
             // 检查合法性
             if (request_message.ScriptObjectIsValid())
             {
-                logger.debug(383, "TaskThread: Handle message from InputThread : [" + request_message.toString() + "]")
+                logger.debug(518, "TaskThread: Handle message from InputThread : [" + request_message.toString() + "]")
 
                 // 获取操作名，将数据映射到具体的路由上
                 try
@@ -430,6 +534,9 @@ class TaskThread : thread
 
         // 主循环结束，退出循环
         Logger.debug(384, "TaskThread: TaskThread terminating...")
+
+        // 注销线程
+        thread_manager.decrease()
         Logger.debug(385, "TaskThread: TaskThread terminated")
     }
 
@@ -455,6 +562,7 @@ class OutputThread : thread
 
     object init(object self)
     {
+        // 初始化属性
         is_terminated = 0
         output_pip_path = config.get("output_pip_path")
         output_pip_lock = config.get("output_pip_lock")
@@ -462,6 +570,11 @@ class OutputThread : thread
         response_message_cache_prototype = NewTagList()
         response_message_cache = response_message_cache_prototype.TagGroupClone()
 
+        return self
+    }
+
+    void RunThread(object self)
+    {
         // 创建输出管道文件
         if (DoesFileExist(output_pip_path))
             DeleteFile(output_pip_path)
@@ -472,11 +585,13 @@ class OutputThread : thread
             DeleteFile(output_pip_lock)
         CreateFile(output_pip_lock)
 
-        return self
-    }
+        // 注册线程
+        thread_manager.increase()
+        Logger.debug(607, "OutputThread done registered")
 
-    void RunThread(object self)
-    {
+        // 初始化线程状态量
+        is_terminated = 0
+
         // 提取响应并且写入输出文件当中
         while (!is_terminated)
         {
@@ -544,8 +659,10 @@ class OutputThread : thread
         // 删除锁文件
         Logger.debug(541, "OutputThread: OutputThread terminating, delete dm_out.lock file...")
         if (DoesFileExist(output_pip_lock))
-            DeleteFile(output_pip_lock)        
+            DeleteFile(output_pip_lock)
 
+        // 注销线程
+        thread_manager.decrease()
         Logger.debug(545, "OutputThread: OutputThread terminated")
     }
 
@@ -560,8 +677,14 @@ object input_thread = alloc(InputThread).init()  // 输入线程
 object task_thread = alloc(TaskThread).init()  // 任务线程
 object output_thread = alloc(OutputThread).init()  // 输出线程
 
+// object input_thread  // 输入线程
+// object task_thread  // 任务线程
+// object output_thread  // 输出线程
+
 // 启动程序
 void launch() {
+    thread_manager.StartThread()  // 线程管理器
+
     input_thread.StartThread()
     task_thread.StartThread()
     output_thread.StartThread()
@@ -576,16 +699,131 @@ void shutdown()
 }
 
 // ===========================================================================
+// 程序GUI线程，操作后端程序运行
+// ===========================================================================
+class GUI : UIFrame
+{
+
+    // 程序状态量，表示是否启动程序
+    number is_launched
+
+    // 程序析构函数，如果GUI被关闭，应该终止程序执行 
+    ~GUI(object self) 
+    {
+        if (is_launched) {
+            shutdown()  // 关闭程序
+            logger.debug(600, "Shutdown Program due to gui closed")
+        }
+    }
+
+    TagGroup CreateDLGTagGroup(object self)
+    {
+        // Dialog building method
+        TagGroup DLGtgs, DLGItems
+        DLGtgs = DLGCreateDialog("CDialog", DLGItems)
+
+        // 启动按钮
+        TagGroup launch_Label = DLGCreateLabel("Launch Program").DLGIdentifier("Label_1")
+        TagGroup launch_button = DLGCreatePushButton("Initiate", "launch")
+
+        // 停止按钮
+        TagGroup shutdown_Label = DLGCreateLabel("Shutdown Program").DLGIdentifier("Label_2")
+        TagGroup shutdown_button = DLGCreatePushButton("Terminate", "shutdown")
+
+        DLGItems.DLGAddElement(launch_Label)
+        DLGItems.DLGAddElement(launch_button)
+
+        DLGItems.DLGAddElement(shutdown_Label)
+        DLGItems.DLGAddElement(shutdown_button)
+
+        DLGtgs.DLGTableLayout(2, 2, 1)
+        return DLGtgs
+    }
+
+    object LaunchAsModelessDialog(object self)
+    {
+
+        is_launched = 0  // 初始化状态量
+
+        self.init(self.CreateDLGTagGroup())
+        self.Display("DM Process GUI")
+    }
+
+    // Methods invoked by buttons
+    void launch(object self)
+    {
+        if (is_launched)
+        {
+            Logger.debug(640, "Cannot launch program as the program has already launched")
+        }
+        else
+        {
+            ClearResults()
+            Result(GetTime(1) + "| DEBUG    |<main>:670 - Launching DM Script Process, current version: " + version)
+            launch()  // 启动程序线程
+
+            while (1) {
+                if (thread_manager.count_thread_num() == 3)
+                    break
+            }
+
+            sleep(0.1)
+            logger.debug(785, "Program threads all done register work!")
+            
+            is_launched = 1
+            Logger.debug(640, "DM Script Process launching successfully")
+        }
+    }
+
+    void shutdown(object self)
+    {
+        if (is_launched)
+        {
+            Logger.debug(640, "Shutdown backend program")
+            shutdown()  // 关闭程序
+
+            while (1) {
+                if (thread_manager.count_thread_num() == 0)
+                    break
+            }
+
+            sleep(0.1)
+            logger.debug(785, "Program threads all done register work!")
+
+            is_launched = 0
+            Logger.debug(640, "DM Script Process terminating successfully")
+        }
+        else
+        {
+            Logger.debug(640, "Cannot shutdown program as the program has not launched yet")
+        }
+    }
+}
+
+// ===========================================================================
 // 程序入口
 // ===========================================================================
 void main(void)
 {
-    launch()  // 启动程序
 
-    // 模拟耗时任务
-    sleep(90)
+    // initConfiguration()
 
-    shutdown()  // 关闭程序
+    // 判断是否启用gui
+    number enable_gui = config.get("enable_gui").val()
+    if (enable_gui)
+    {
+        // 启动携带gui的后端程序
+        Logger.debug(668, "Launching program with gui.")
+        Alloc(GUI).LaunchAsModelessDialog()
+    }
+    else
+    {
+        // 如果不启用gui，那么程序将会在运行一段程序后自动停止
+        Logger.debug(647, "Detect NOT enable gui, program will automatically stop in some time.")
+        launch()  // 启动程序
+        sleep(90)  // 模拟耗时任务
+        shutdown()  // 关闭程序
+    }
 }
 
 // 启动程序

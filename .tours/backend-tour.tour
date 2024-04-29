@@ -1,0 +1,36 @@
+{
+  "$schema": "https://aka.ms/codetour-schema",
+  "title": "backend-tour",
+  "steps": [
+    {
+      "file": "backend/main.s",
+      "description": "读取配置文件",
+      "line": 38,
+      "title": "初始化配置"
+    },
+    {
+      "file": "backend/main.s",
+      "description": "输入消息管道读线程\r\n采用锁机制来避免并发问题，存在锁文件dm_in.lock时将不会读取管道内容，外部进程应该在写入数据完成之后删除锁文件，触发后端进程读取事件",
+      "line": 183,
+      "title": "输入管道"
+    },
+    {
+      "file": "backend/main.s",
+      "description": "任务线程\r\n通过request_mq消息队列的形式获取从输入管道读取线程获取的消息字符串，解析字符串获取待执行任务",
+      "line": 393,
+      "title": "任务线程"
+    },
+    {
+      "file": "backend/main.s",
+      "description": "输出线程\r\n通过response_mq获取待输出消息，转换成字符串格式写出，写出完成后删除锁文件，告知外部线程写出完毕",
+      "line": 449,
+      "title": "输出管道"
+    },
+    {
+      "file": "backend/main.s",
+      "description": "任务派发器\r\n通过函数名动态绑定，执行某个待执行的函数",
+      "line": 366,
+      "title": "任务派发器"
+    }
+  ]
+}

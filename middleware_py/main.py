@@ -12,14 +12,12 @@ import pickle
 import queue
 import socket
 import threading
-import sys
 from collections import defaultdict
 
 import yaml
 from loguru import logger
 
-from message import Message
-from mq_py.properties import Properties
+from middleware_py.properties import Properties
 
 # 配置日志输出等级
 logger.info(f'Launching MQ process by python, current version: {__version__}')
@@ -35,8 +33,6 @@ logger.debug(f'Loading MessageQueue yaml config, path: {CONFIG_PATH}')
 logger.debug(f'Loading backend process config, path: {yml_cfg["path"]["backend_config"]}')
 prop_cfg = Properties(yml_cfg['path']['backend_config']).get_prop()
 logger.debug(f'Complete loading program config')
-
-
 
 # 请求消息队列，由后端接口读取输出管道数据写入此处，由前端接口读出派发给对应前端程序
 # 格式: [ip:port]<空格>[操作名]<空格>[响应体]<换行符> 字符串
@@ -74,12 +70,14 @@ output_pip_path = prop_cfg['output_pip_path']
 # 输出管道锁文件，如果不存在锁文件，可以直接读取消息，读取完成之后需要创建锁文件，存在锁文件的时候不应该读取输出管道消息
 output_pip_lock = prop_cfg['output_pip_lock']
 
-# 检测管道文件是否存在
+# 检查管道文件是否存在
 if not os.path.exists(input_pip_path):
-    raise FileNotFoundError(f'Cannot find input pip file at : {input_pip_path}')
+    logger.error('Unable to find pip file, check if a dm script is running')
+    raise FileNotFoundError(f'{input_pip_path} pip file not found')
 
 if not os.path.exists(output_pip_path):
-    raise FileNotFoundError(f'Cannot find output pip file at : {output_pip_path}')
+    logger.error('Unable to find pip file, check if a dm script is running')
+    raise FileNotFoundError(f'{output_pip_path} pip file not found')
 
 
 class connection_builder(threading.Thread):
@@ -121,21 +119,46 @@ class backend_input_middleware(threading.Thread):
     消息格式-消息中间件  : Message实例
 
     """
-
     def run(self) -> None:
         logger.debug('Backend-Input-Middleware interface launched')
         global is_terminated, timeout
+        request_list = []
         while not is_terminated:
             try:
-                request_message: str = request_mq.get(timeout=timeout)
+                # 从请求消息缓存队列获取消息并加入列表
+                item: str = request_mq.get(timeout=timeout)
+                request_list.append(item)
 
-                print(request_message)
+                # 检测锁文件是否存在
+                if not os.path.exists(input_pip_lock):
+                    # 锁文件不存在，不允许写入
+                    continue
+                else:
+                    # 锁文件存在，允许写入
+                    input_pip = open(input_pip_path, 'w', encoding='utf-8')
+                    try:
+                        for request_message in request_list:
+                            input_pip.writelines(request_message)
+                            input_pip.flush()
+                    # 关闭文件流
+                    finally:
+                        # 清空缓存列表
+                        request_list.clear()
+                        # 关闭文件流
+                        input_pip.close()
+
+                    # 删除锁文件，触发DM进程读消息
+                    try:
+                        os.remove(input_pip_lock)
+                    except OSError as e:
+                        logger.error(f'Unable handle deleting input_pip_lock file at {input_pip_path}: {e}')
 
             except queue.Empty:
                 # 超时退出
                 if is_terminated:
                     break
         # 线程退出
+        logger.debug('Backend-Input-Middleware interface shutdown')
 
 
 class backend_output_middleware(threading.Thread):
@@ -152,7 +175,37 @@ class backend_output_middleware(threading.Thread):
 
     def run(self) -> None:
         logger.debug('Backend-Output-Middleware interface launched')
-        ...
+        global is_terminated
+        while not is_terminated:
+            # 检查文件锁是否存在
+            if not os.path.exists(output_pip_lock):
+                # 锁文件不存在时可以执行读取操作
+                read_pip = None
+                try:
+                    read_pip = open(output_pip_path, 'r', encoding='utf-8')
+                    for line in read_pip:
+                        # 去皮
+                        line = line.strip()
+                        logger.debug(f"line from output pip : {line}")
+
+                except FileNotFoundError as e:
+                    logger.error(f'could not open pip file with given path : {output_pip_path}')
+                finally:
+                    if read_pip is not None:
+                        read_pip.close()
+
+                # 清空文件内容
+                write_pip = open(output_pip_path, 'w', encoding='utf-8')
+                write_pip.close()
+
+                # 重新创建锁文件
+                pip_lock = open(output_pip_lock, 'w', encoding='utf-8')
+                pip_lock.close()
+
+            # 主循环仅仅检查文件内容
+            pass
+        # 线程退出
+        logger.debug('Frontend-Input-Middleware interface shutdown')
 
 
 class frontend_output_middleware(threading.Thread):
