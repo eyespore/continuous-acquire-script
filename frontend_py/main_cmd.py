@@ -9,6 +9,7 @@ import threading
 import yaml
 from loguru import logger
 
+from util.config_util import config
 from network import Message
 
 logger.info(f'Launching MainCMD program by python')
@@ -21,14 +22,14 @@ class ConnectionHandler:
     # 前端程序与后端程序连接实例
     connection = None
 
-    def __init__(self, config):
+    def __init__(self, config_):
         """
         连接处理器初始化方法
-        :param config: 连接配置，配置连接的端口和主机信息
+        :param config_: 连接配置，配置连接的端口和主机信息
         """
-        server_host = config['server']['host']
-        server_port = config['server']['port']
-        server_timeout = config['server']['timeout']
+        server_host = config_['server_host']
+        server_port = config_['server_port']
+        server_timeout = config_['server_timeout']
         logger.info(f'Connecting to MessageQueue Server on {server_host}:{server_port}')
         self.connection = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
@@ -40,11 +41,7 @@ class ConnectionHandler:
 
 
 # 配置文件初始化
-ROOT_DIR = './frontend_py'  # 项目根路径
-CONFIG_PATH = f'{ROOT_DIR}/config.yaml'
-with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-    cfg = yaml.safe_load(f)
-    connection_handler = ConnectionHandler(cfg)
+connection_handler = ConnectionHandler(config)
 
 # 线程退出信号量
 is_terminated = False

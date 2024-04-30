@@ -4,7 +4,6 @@ Created on 2024.4.30
 @version: 0.0.1
 网络组件
 """
-
 from loguru import logger
 
 
@@ -25,15 +24,10 @@ class Message:
 
     def __str__(self):
         return (
-            f"body: {self.body} \n"
-            f"code: {self.code}\n"
+            f"address: {self.address}\n"
             f"name: {self.name} \n"
-            f"body: {self.body} \n"
-            f"address: {self.address}")
-
-    """
-    ============================ Getter ============================
-    """
+            f"code: {self.code}\n"
+            f"body: {self.body}")
 
     def getCode(self) -> int:
         return self.code
@@ -46,10 +40,6 @@ class Message:
 
     def getAddress(self) -> tuple:
         return self.address
-
-    """
-    ============================ Setter ============================
-    """
 
     def setBody(self, body):
         self.body = body
@@ -77,20 +67,12 @@ class Message:
         # [ip:port]<空格>[操作名]<空格>[响应体]<换行符>
         return f'{self.address[0]}:{self.address[1]} {self.name} {self.body}'
 
-    # def toOutputPipLine(self):
-    #     # [ip:port]<空格>[操作名]<空格>[返回码]<空格>[响应体]<换行符>
-    #     return f'{self.ip}:{self.port} {self.code} {self.name} {self.body}'
-
     def to_frontend_input(self):
         """
         将消息转换为前端输入接口格式
         :return:
         """
         return self
-
-    """
-    ============================ Parser ============================
-    """
 
     @staticmethod
     def from_frontend_output(line: str):
@@ -110,30 +92,6 @@ class Message:
         message.setBody(body)
         return message
 
-    # @staticmethod
-    # def from_frontend_output():
-    #     #
-    #     ...
-
-    # @staticmethod
-    # def from_backend_input(line: str):
-    #     # [ip:port]<空格>[操作名]<空格>[响应体]<换行符>
-    #     try:
-    #         split = []
-    #         for i in range(0, 2):
-    #             pos = line.find(' ')
-    #             split.append(line[:pos])
-    #             line = line[pos + 1:]
-    #         split.append(line)
-    #         return Message(
-    #             ip=split[0].split(':')[0],
-    #             port=split[0].split(':')[1],
-    #             name=split[1],
-    #             body=split[2]
-    #         )
-    #     except Exception as e:
-    #         logger.error(f'Unsupported input pip message format : {line}')
-
     @staticmethod
     def from_backend_output(line: str):
         """
@@ -152,7 +110,6 @@ class Message:
             host = split[0].split(':')[0]
             port = int(split[0].split(':')[1])
             address = (host, port)
-            # message = Message(name=split[1], code=split[2], body=split[3])
             message = Message()
             message.setAddress(address)
             message.setName(split[1])

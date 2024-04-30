@@ -36,7 +36,7 @@ QtCore.QCoreApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling)
 ROOT_DIR = '.'
 
 # 菜单UI路径设定
-MENU_UI_PATH = f'{ROOT_DIR}/main.ui'
+MENU_UI_PATH = f'{ROOT_DIR}/main_gui.ui'
 
 # yaml配置文件路径设定
 CONFIG_PATH = f'{ROOT_DIR}/config.yaml'
