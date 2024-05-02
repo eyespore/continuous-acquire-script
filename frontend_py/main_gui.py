@@ -35,7 +35,7 @@ class Status(Enum):
     TERMINABLE = "STOP"
 
 
-class MainUI(QWidget):
+class Gui(QWidget):
     # 基础常量
     CHECK_BOX_CHECKED = 2  # 单选框被选中后表现的value
     TAB_XY_CONTINUOUS_NUM = 0  # xy坐标横移连拍tab对应的下标
@@ -390,6 +390,6 @@ class MainUI(QWidget):
 if __name__ == '__main__':
     # 主执行函数
     app = QApplication(sys.argv)
-    menu = MainUI()
+    menu = Gui()
     menu.show()
     app.exec_()

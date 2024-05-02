@@ -114,72 +114,154 @@ object thread_register_queue = NewMessageQueue()
 // ===========================================================================
 class Message : object
 {
-    string address  // ipv4地址
-    number port  // 端口
-    number code  // 返回码
-    string name  // 操作名
-    string body  // 数据体
+    taggroup head  // 消息头
+    taggroup body  // 消息体
 
-    Message(object self)
+    void setHead(object self, taggroup head_)
     {
-        // 初始化返回码
-        code = -1
+        head = head_
     }
 
-    void setAddress(object self, string address_)
-    {
-        address = address_
-    }
-
-    void setPort(object self, number port_)
-    {
-        port = port_
-    }
-
-    void setName(object self, string name_)
-    {
-        name = name_
-    }
-
-    void setBody(object self, string body_)
+    void setBody(object self, taggroup body_)
     {
         body = body_
     }
 
-    void setCode(object self, number code_)
+    void setHeader(object self, string key, string val)
     {
-        code = code_
+        head.TagGroupSetTagAsString(key, val)
     }
 
-    number getPort(object self)
-    {
-        return port
+    void set(object self, string key, string val) {
+        body.TagGroupSetTagAsString(key, val)
     }
 
-    string getAddress(object self)
+    // 根据键名获取消息头中的键值
+    string getHeader(object self, string key)
     {
-        return address
+        string val
+        head.TagGroupGetTagAsString(key, val)
+        return val
     }
 
-    string getName(object self)
-    {
-        return name
+    // 根据键名获取消息体中的键值
+    string get(object self, string key) {
+        string val
+        body.TagGroupGetTagAsString(key, val)
+        return val        
     }
 
-    string getBody(object self)
+    taggroup getHead(object self)
+    {
+        return head
+    }
+
+    taggroup getBody(object self)
     {
         return body
     }
-
-    string toString(object self)
-    {
-        if (code != -1)
-        {
-            return address + ":" + port + " " + name + " " + code + " " + body
-        }
-        return address + ":" + port + " " + name + " " + body
-    }
 }
+
+// ===========================================================================
+// 消息适配器，可以将前端传入字符串处理成为DM进程消息格式，也可以将DM进程消息转换为
+// 字符串前端支持格式
+// ===========================================================================
+class MessageAdapter : object
+{
+    string comma_seperator  // 键值对分隔符
+    string colon_seperator  // 元素分隔符
+    string message_seperator  // 消息分隔符
+    object message_prototype  // 请求消息原型
+
+    MessageAdapter(object self)
+    {
+        comma_seperator = "##"
+        colon_seperator = "=>"
+        message_seperator = "$$$"
+        message_prototype = alloc(Message)
+    }
+
+    // 解析消息头和消息体
+    TagGroup parse(object self, string str)
+    {
+        TagGroup tg = NewTagGroup()  // 头部键值对
+        try
+        {
+            // 循环解析头部字符串
+            while (1)
+            {
+                // 以逗号作为键值对分隔
+                number comma_pos = str.find(comma_seperator)
+                string kv
+                if (comma_pos != -1)
+                {
+                    kv = str.left(comma_pos)
+                    str = str.right(str.len() - comma_pos - comma_seperator.len())
+                }
+                else
+                {
+                    kv = str
+                }
+
+                // 根据分隔符解析得到key和val
+                number colon_pos = kv.find(colon_seperator)
+                string key = kv.left(colon_pos)
+                string val = kv.right(kv.len() - colon_pos - colon_seperator.len())
+                tg.TagGroupSetTagAsString(key, val)
+
+                if (comma_pos == -1) break
+            }
+            return tg
+        }
+        catch
+        {
+            break  // 出现异常则将消息重定向到InvalidMessageException
+        }
+
+        tg.TagGroupSetTagAsString("name", "InvalidMessageException")
+        return tg
+    }
+
+    // 格式化头部
+    string format(object self, taggroup tg) 
+    {
+        number count = tg.TagGroupCountTags()
+        string str = ""
+        for (number i = 0; i < count; i++)
+        {
+            string key = tg.TagGroupGetTagLabel(i)
+            string val
+            tg.TagGroupGetTagAsString(key, val)
+            if (str.len() == 0)
+                str = key + colon_seperator + val
+            else
+                str = str + comma_seperator + key + colon_seperator + val
+        }
+        return str
+    }
+
+    // 将字符串转化为消息实例
+    object convertToMessage(object self, string str)
+    {
+        number pos = str.find(message_seperator)
+        taggroup head = self.parse(str.left(pos))  // 消息头
+        taggroup body = self.parse(str.right(str.len() - pos - message_seperator.len()));  // 消息体
+
+        object msg = message_prototype.ScriptObjectClone()
+        msg.setHead(head)  // 消息头
+        msg.setBody(body)  // 消息体
+        return msg
+    }
+
+    // 将消息实例转化成控制台打印格式
+    string convertToString(object self, object msg)
+    {
+        return self.format(msg.getHead()) + message_seperator + self.format(msg.getBody())
+    }
+
+}
+
+object message_adapter = alloc(MessageAdapter)
 
 // 线程管理器注册事件
 class register_msg: object {
@@ -193,7 +275,6 @@ class register_msg: object {
 	string get_option(object self) {
 		return option
 	}
-
 }
 
 // ===========================================================================
@@ -262,7 +343,6 @@ class InputThread : thread
     string input_pip_path  // 输入管道路径
     string input_pip_lock  // 输入管道锁
 
-    object request_message_prototype  // 请求消息原型
 
     object init(object self)
     {
@@ -270,75 +350,7 @@ class InputThread : thread
         is_terminated = 0
         input_pip_path = config.get("input_pip_path")
         input_pip_lock = config.get("input_pip_lock")
-
-        // 用于快速创建消息对象
-        request_message_prototype = alloc(Message)
-
         return self
-    }
-
-    // 解析字符串，将字符串按空格分隔，组成taglist并返回
-    TagGroup parseLine(object self, string inputString)
-    {
-        // initialize a tag list to store parsing results
-        TagGroup tgWordList = NewTagList();
-
-        // 32为空格符在ASCII字符集中的码值
-        // 通过空格将消息切割称为3段即可返回
-        try
-        {
-            for (number i = 0; i < 3; i++)
-            {
-                if (i == 2)
-                {
-                    tgWordList.TagGroupInsertTagAsString(tgWordList.TagGroupCountTags(), inputString);
-                }
-                else
-                {
-                    number pos = inputString.find(chr(32));
-                    string str = inputString.left(pos);
-                    tgWordList.TagGroupInsertTagAsString(tgWordList.TagGroupCountTags(), str);
-                    inputString = inputString.right(inputString.len() - pos - 1);
-                }
-            }
-        }
-        catch
-        {
-            Throw("Unsupported request message format")
-            break
-        }
-        return tgWordList;
-    };
-
-    // 消息转换方法，将单行消息封装成为request_message
-    object ConvertLine2Request(object self, string line)
-    {
-        // 消息格式: 127.0.0.1:25565 acquireImg x_bin: 18
-        // 解析字符串
-        TagGroup str_list = self.parseLine(line)
-        number pos  // 字符串索引
-
-        string str_1  // 地址和端口
-        string str_2  // 操作名
-        string str_3  // 请求体
-        str_list.TagGroupGetIndexedTagAsString(0, str_1)
-        str_list.TagGroupGetIndexedTagAsString(1, str_2)
-        str_list.TagGroupGetIndexedTagAsString(2, str_3)
-
-        pos = str_1.find(chr(58))
-
-        string address = str_1.left(pos)  // 地址
-        number port = str_1.right(str_1.len() - pos - 1).val()  // 端口
-        string name = str_2  // 操作名
-        string body = str_3  // 请求体
-
-        // 以原型模式构建任务实例RequestMessage
-        object request_message = request_message_prototype.ScriptObjectClone()
-        request_message.setAddress(address)
-        request_message.setPort(port)
-        request_message.setName(name)
-        request_message.setBody(body)
-        return request_message
     }
 
     void RunThread(object self)
@@ -409,8 +421,9 @@ class InputThread : thread
                     try
                     {
                         // 格式不正确时能够正确处理异常情况
-                        object request_message = self.ConvertLine2Request(line)
-                        logger.debug(414, "InputThread: Accepted message : [" + request_message.toString() + "]")
+                        object request_message = message_adapter.convertToMessage(line)
+                        // logger.debug(414, "InputThread: Accepted message : [" + request_message.toString() + "]")
+                        logger.debug(414, "InputThread: Accepted message : [" + message_adapter.convertToString(request_message) + "]")
                         // 将消息提交到队列
                         request_mq.PostMessage(request_message)
                     }
@@ -458,11 +471,11 @@ class InputThread : thread
 // ===========================================================================
 class DMTaskDispatcher
 {
-    object request_message
+    object message
 
-    void setRequestMessage(object self, object request_message_)
+    void setRequestMessage(object self, object request_message)
     {
-        request_message = request_message_
+        message = request_message
     }
 
     // TODO: 添加功能方法 
@@ -470,10 +483,17 @@ class DMTaskDispatcher
     // 未找到资源
     void NotFound(object self)
     {
-        // 处理消息
-        request_message.setBody("Unable accessing target resources")
-        request_message.setCode(404)
-        response_mq.PostMessage(request_message)
+        message.set("message", "Unable accessing target resources")
+        message.set("code", "404")
+        response_mq.PostMessage(message)
+    }
+
+    // 消息头部解析错误
+    void InvalidMessageException(object self)
+    {
+        message.set("message","Unable parsing message, check if message is in correctly writting")
+        message.set("code", "400")
+        response_mq.PostMessage(message)
     }
 
 }
@@ -514,19 +534,25 @@ class TaskThread : thread
             // 检查合法性
             if (request_message.ScriptObjectIsValid())
             {
-                logger.debug(518, "TaskThread: Handle message from InputThread : [" + request_message.toString() + "]")
+                logger.debug(518, "TaskThread: Handle message from InputThread : [" + message_adapter.convertToString(request_message) + "]")
 
                 // 获取操作名，将数据映射到具体的路由上
                 try
                 {
                     dm_task_dispatcher.setRequestMessage(request_message)
-                    string name = request_message.getName()
+                    string name = request_message.getHeader("name")
+                    // 判断是否成功获取操作名
+                    if (name == null) {
+                        // 未设置操作名
+                        request_message.setHeader("name", "InvalidMessageException")
+                        name = request_message.getHeader("name")
+                    }
                     number task_id = AddMainThreadSingleTask(dm_task_dispatcher, name, 0)
                 }
                 catch
                 {
                     // 如果没有找到操作名，引导至NotFound
-                    Logger.debug(377, "TaskThread: Unsupported operation name, lead to NotFound")
+                    Logger.debug(538, "TaskThread: Unsupported operation name, lead to NotFound")
                     number task_id = AddMainThreadSingleTask(dm_task_dispatcher, "NotFound", 0)
                     break
                 }
@@ -601,8 +627,8 @@ class OutputThread : thread
             if (response_message.ScriptObjectIsValid())
             {
                 // 将消息加载到缓存
-                logger.debug(458, "OutputThread: Caching response message : [" + response_message.toString() + "]")
-                response_message_cache.TagGroupInsertTagAsString(response_message_cache.TagGroupCountTags(), response_message.toString());
+                logger.debug(458, "OutputThread: Caching response message : [" + message_adapter.convertToString(response_message) + "]")
+                response_message_cache.TagGroupInsertTagAsString(response_message_cache.TagGroupCountTags(), message_adapter.convertToString(response_message));
             }
 
             // 响应消息队列缓存数量

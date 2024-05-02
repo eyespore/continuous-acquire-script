@@ -4,11 +4,8 @@ import yaml
 """
 前端进程配置类
 """
-# 程序配置字典，通过字典来获取程序配置
-config = {}
-ROOT_DIR = "./frontend_py"
-# yaml配置文件路径设定
-CONFIG_PATH = f'{ROOT_DIR}/config.yaml'
+config = {}  # 程序配置字典，通过字典来获取程序配置
+CONFIG_PATH = f'./util/config.yaml'  # yaml配置文件路径设定
 
 # 尝试读取配置，如果配置存在错误则会采用默认配置
 with open(CONFIG_PATH, 'r', encoding='utf-8') as f:

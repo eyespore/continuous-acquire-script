@@ -13,41 +13,25 @@ import socket
 import threading
 from collections import defaultdict
 
-import yaml
 from loguru import logger
 
-from network import Message
-from middleware_py.properties import Properties
+from util.network import Message
+from util.properties import Properties
+from util.config_util import config
 
-# 配置日志输出等级
 logger.info(f'Launching MQ process by python')
-
-# 配置文件初始化
-ROOT_DIR = '.'  # 项目根路径
-CONFIG_PATH = f'{ROOT_DIR}/config.yaml'
-with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-    yml_cfg = yaml.safe_load(f)
-
-logger.debug(f'Loading MessageQueue yaml config, path: {CONFIG_PATH}')
-
-logger.debug(f'Loading backend process config, path: {yml_cfg["path"]["backend_config"]}')
-prop_cfg = Properties(yml_cfg['path']['backend_config']).get_prop()
+logger.debug(f'Loading backend process config, path: {config["backend_config"]}')
+prop_cfg = Properties(config['backend_config']).get_prop()
 logger.debug(f'Complete loading program config')
 
 # 请求消息队列，由后端接口读取输出管道数据写入此处，由前端接口读出派发给对应前端程序
-# 格式: [ip:port]<空格>[操作名]<空格>[响应体]<换行符> 字符串
 request_mq = queue.Queue()
 
 # 响应消息队列，由前端接口会被缓存到此处，由后端接口写入输入管道中
-# 格式: [ip:port]<空格>[操作名]<空格>[返回码]<空格>[响应体]<换行符> 字符串
 response_mq = queue.Queue()
 
 # 连接队列，通过connection_handler处理之后产生的连接对象会被存储在此处
 connection_cache = queue.Queue()
-
-# 连接处理线程追踪器，为二维字典，以address作为键名，connection连接以及connection_thread作为键值
-# 弃用原连接追踪，采用线程安全的连接追踪
-# connection_tracker = defaultdict(dict)
 
 
 class connection_context_manager:
@@ -68,7 +52,7 @@ class connection_context_manager:
     # 移除一个连接上下文
     def remove(self, address: tuple):
         self.lock.acquire()
-        self.connection_tracker.pop(address)
+        self.connection_tracker.pop(f'{address[0]}:{address[1]}')
         self.lock.release()
 
     def block_and_wait(self):
@@ -89,13 +73,9 @@ class connection_context_manager:
 # 连接上下文管理
 connection_context = connection_context_manager()
 
-# 中间件绑定ip地址
-server_host = yml_cfg['server']['host']
-# 中间件绑定端口
-server_port = yml_cfg['server']['port']
-
-# 超时时间，超时后会再次检查线程状态
-timeout = yml_cfg['server']['timeout']
+server_host = config['server_host']  # 中间件绑定ip地址
+server_port = config['server_port']  # 中间件绑定端口
+timeout = config['server_timeout']  # 超时时间，超时后会再次检查线程状态
 
 # 线程退出信号量
 is_terminated = False
@@ -139,7 +119,6 @@ class connection_builder(threading.Thread):
             try:
                 connection, address = server.accept()
                 logger.info(f'Accept connection from {address[0]}:{address[1]}')
-                # connection_tracker[address]['connection'] = connection
                 # 将连接对象添加进入连接池
                 connection_cache.put((connection, address))
             except socket.timeout:
@@ -279,7 +258,7 @@ class frontend_output_middleware(threading.Thread):
                 # connection_tracker[address]['connection_thread'] = connection_thread
 
                 # 将连接构建成上下文交由连接上下文管理
-                connection_context.add(address=address,
+                connection_context.add(address=f'{address[0]}:{address[1]}',
                                        connection=connection,
                                        connection_handler_thread=connection_thread)
 
@@ -317,19 +296,19 @@ class frontend_output_middleware(threading.Thread):
                 # 解码对象，对象数据在四字节之后
                 message = pickle.loads(data[4:])
                 # 或取当前用户ip地址，为message设置
-                message.setAddress(address)
-
+                message.setHeader('address', f'{address[0]}:{address[1]}')
                 # 将消息转化为字符串格式加入队列中
-                request_mq.put(message.to_backend_input())
+                request_mq.put(Message.dumps(message))
 
             except socket.timeout as e:
                 if is_terminated:
                     connection.close()
                     # 在连接上下文中取消追踪当前连接上下文
                     connection_context.remove(address)
-
                     logger.debug(f'Connection timeout : {address[0]}:{address[1]}')
                     return
+            except AttributeError as e:
+                logger.error('Cannot correctly set message due to incorrect message type')
             except ConnectionResetError as e:
                 # 在连接上下文中取消追踪当前连接上下文
                 connection_context.remove(address)
@@ -361,14 +340,9 @@ class frontend_input_middleware(threading.Thread):
                 # 从请求消息缓存队列获取消息并加入列表
                 item: str = response_mq.get(timeout=timeout)
                 # 将消息转化为Message格式，然后通过连接对象发送给前端
-                response_message = Message.from_backend_output(item)
+                response_message = Message.loads(item)
                 # logger.debug(f'Response message : {response_message}')
-
-                # 已弃用
-                # 从连接池中获取连接对象，通过键connection获取连接对象
-                # connection = connection_tracker[response_message.getAddress()]['connection']
-
-                connection = connection_context.get(response_message.getAddress())
+                connection = connection_context.get(response_message.getHeader('address'))
 
                 # 编码对象
                 data = pickle.dumps(response_message, protocol=pickle.HIGHEST_PROTOCOL)
@@ -438,12 +412,6 @@ class middleware_cmd(cmd.Cmd):
         self.interface_4.join()
 
         # 等待所有连接线程退出
-        # for address, connection_bundle in connection_tracker.items():
-        #     try:
-        #         connection_bundle['connection_thread'].join()
-        #     except KeyError as e:
-        #         logger.debug('')
-
         connection_context.block_and_wait()
 
         logger.info('Middleware successfully shutdown')
