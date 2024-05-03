@@ -24,7 +24,7 @@ class Message:
         return f'{self.head}->{self.body}'
 
     def get(self, key: str) -> str:
-        return self.body[key]
+        return self.body.get(key)
 
     def set(self, key: str, val: str) -> None:
         self.body[key] = val
@@ -32,8 +32,8 @@ class Message:
     def setHeader(self, key: str, val: str):
         self.head[key] = val
 
-    def getHeader(self, key: str):
-        return self.head[key]
+    def getHeader(self, key: str) -> str:
+        return self.head.get(key)
 
     def getBody(self) -> Dict[str, str]:
         return self.body

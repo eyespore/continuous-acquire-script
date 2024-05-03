@@ -63,11 +63,13 @@ class connection_context_manager:
                 logger.error(f'Hit Nonexistent Key : {address[0]}:{address[1]}')
 
     # 通过地址元组获取映射到的连接实例
-    def get(self, address: tuple):
+    def getConnection(self, address: str):
         self.lock.acquire()
-        to_return = self.connection_tracker[address]['connection']
+        if self.connection_tracker.get(address):
+            self.lock.release()
+            return self.connection_tracker[address].get('connection')
         self.lock.release()
-        return to_return
+        return None
 
 
 # 连接上下文管理
@@ -298,7 +300,10 @@ class frontend_output_middleware(threading.Thread):
                 # 或取当前用户ip地址，为message设置
                 message.setHeader('address', f'{address[0]}:{address[1]}')
                 # 将消息转化为字符串格式加入队列中
-                request_mq.put(Message.dumps(message))
+                try:
+                    request_mq.put(Message.dumps(message))
+                except Exception as e:
+                    logger.error(f'Bad message format : {e}')
 
             except socket.timeout as e:
                 if is_terminated:
@@ -327,10 +332,6 @@ class frontend_input_middleware(threading.Thread):
     """
     前端响应线程，将response_mq当中已有消息取出，然后根据Message格式解析，同时获取源的ip以及端口，通过
     connection_pool获取原始连接对象，将封装好的Message返回给前端进程，前端进程通过函数接收
-
-    消息格式-前端进程     : Message实例
-    消息格式-response_mq : [ip:port]<空格>[操作名]<空格>[返回码]<空格>[响应体]<换行符> （字符串形式）
-
     """
 
     def run(self):
@@ -342,7 +343,11 @@ class frontend_input_middleware(threading.Thread):
                 # 将消息转化为Message格式，然后通过连接对象发送给前端
                 response_message = Message.loads(item)
                 # logger.debug(f'Response message : {response_message}')
-                connection = connection_context.get(response_message.getHeader('address'))
+                connection = connection_context.getConnection(response_message.getHeader('address'))
+
+                # 如果连接不存在，不发送数据
+                if not connection:
+                    continue
 
                 # 编码对象
                 data = pickle.dumps(response_message, protocol=pickle.HIGHEST_PROTOCOL)
@@ -358,8 +363,8 @@ class frontend_input_middleware(threading.Thread):
                 if is_terminated:
                     break
             except KeyError as e:
-                # 过程中无法找到某个connection实例，通常是实例在过程中被清除
-                logger.error('Hit Nonexistent Key Exception')
+                # 过程中无法找到某个connection实例，通常是实例在执行任务过程中被清除
+                logger.error(f'Hit Nonexistent Key Exception: {e}')
                 continue
 
         # 线程退出

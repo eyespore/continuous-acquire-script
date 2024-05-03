@@ -100,17 +100,36 @@ void initConfiguration()
 
 initConfiguration()
 
+// ===========================================================================
+// 数学工具类
+// ===========================================================================
+class MathUtils: object
+{
+    number clamp(object self, number x, number min, number max)
+    {
+        if (x > max)
+            return max
+        if (x < min)
+            return min
+        return x
+    }
+
+    number floor(object self, number x)
+    {
+        number val = round(x)
+        return val > x ? val - 1 : val
+    }
+}
+
+object math_utils = alloc(MathUtils)
+
 // 请求消息队列
 object request_mq = NewMessageQueue()
 // 响应消息队列
 object response_mq = NewMessageQueue()
-// 线程注册队列
-object thread_register_queue = NewMessageQueue()
 
 // ===========================================================================
 // 消息对象类，请求消息通过输入线程会被逐条封装成为任务实例，压入消息队列中
-// 请求消息数据格式: [ip:port]<空格>[操作名]<空格>[请求体]<换行符>
-// 响应消息数据格式: [ip:port]<空格>[操作名]<空格>[返回码]<空格>[响应体]<换行符>
 // ===========================================================================
 class Message : object
 {
@@ -259,78 +278,270 @@ class MessageAdapter : object
         return self.format(msg.getHead()) + message_seperator + self.format(msg.getBody())
     }
 
+    // 通过已有的一个消息实例创建新的实例，保留原实例头部
+    object allocWithHead(object self, object origin)
+    {
+        object novel = message_prototype.ScriptObjectClone()
+        novel.setHead(origin.getHead())
+        novel.setBody(NewTagGroup())
+        return novel
+    }
+
 }
 
 object message_adapter = alloc(MessageAdapter)
 
-// 线程管理器注册事件
-class register_msg: object {
-	string option
+// 线程管理器事件
+class ThreadMessage: object {
+	object thread_obj
+    number option
 	
-	object init(object self, string option_) {
-		option = option_
-		return self
+	object init(object self, object thread_obj_, number option_) 
+    {
+		thread_obj = thread_obj_
+        option = option_
+        return self
 	}
-	
-	string get_option(object self) {
-		return option
+
+	object getThreadObj(object self) 
+    {
+		return thread_obj
 	}
+
+    number getOption(object self) 
+    {
+        return option
+    }
 }
 
 // ===========================================================================
-// 线程管理器，管理线程注册
+// 线程管理器
 // ===========================================================================
 class ThreadManager : thread
 {
-    number current_thread_num
-    object inc_msg
-    object dec_msg
+    string name  // 线程管理器名称
+    object thread_mq // 线程注册队列
+    object thread_list  // 线程列表
+    object thread_msg_prototype  // 线程消息原型
+    number is_terminated
+    number running_thread_num  // 运行线程数量
+    number register_thread_num  // 注册线程数量
+
+    number REGISTER_THREAD  // 注册线程
+    number UNREGISTER_THREAD  // 注销线程
+    number LAUNCH_ALL_THREAD  // 启动所有线程
+    number STOP_ALL_THREAD  // 终止所有线程
+    number LAUNCH_SINGLE_THREAD  // 启动某一个线程
+    number STOP_SINGLE_THREAD  // 停止某一个线程
+
+    number INCREASE_RUNNING_THREAD_NUM  // 增加运行线程数
+    number DECREASE_RUNNING_THREAD_NUM  // 减少运行线程数
+
+    number SELECT_RUNNING_THREAD_NUM  // 查询运行线程数
+    number SELECT_REGISTER_THREAD_NUM  // 查询注册线程数 
     
-    object Init(object self)
+    object Init(object self, string name_)
     {
-        // 初始化注册事件
-		inc_msg = alloc(register_msg).Init("increase")
-		dec_msg = alloc(register_msg).Init("decrease")
-        current_thread_num = 0
+        name = name_
+        REGISTER_THREAD = 0
+        UNREGISTER_THREAD = 1
+        LAUNCH_ALL_THREAD = 2
+        STOP_ALL_THREAD = 3
+        LAUNCH_SINGLE_THREAD = 4
+        STOP_SINGLE_THREAD = 5
+
+        INCREASE_RUNNING_THREAD_NUM = 6
+        DECREASE_RUNNING_THREAD_NUM = 7
+
+        SELECT_RUNNING_THREAD_NUM = -1
+        SELECT_REGISTER_THREAD_NUM = -2
+        
+        thread_mq = NewMessageQueue()
+        running_thread_num = 0  // 运行线程数目
+        is_terminated = 0  // 检测线程是否还在运行
+        thread_list = alloc(ObjectList)
+        thread_msg_prototype = alloc(ThreadMessage)
         return self
+    }
+
+    void countRegisterThreadNum(object self)
+    {
+        register_thread_num = thread_list.SizeOfList()
+    }
+
+    // 统计注册线程数目
+    number getRegisterThreadNum(object self)
+    {
+        return register_thread_num
+    }
+
+    // 统计运行线程数目
+    number getRunningThreadNum(object self)
+    {
+        return running_thread_num
     }
 
     void RunThread( object self ) 
     {
-		while (1) {
-		    object option = thread_register_queue.WaitOnMessage(2, null)
-            if (option.ScriptObjectIsValid())
+		while (! is_terminated) 
+        {
+		    object thread_msg = thread_mq.WaitOnMessage(2, null)
+            if (thread_msg.ScriptObjectIsValid())
             {
-			    string opt = option.get_option()
-                if (opt == "increase") {
-                    current_thread_num ++
-                } 
-                else if (opt == "decrease") 
+                number option = thread_msg.getOption()
+                object thread_obj = thread_msg.getThreadObj()
+                // 注销线程
+                if (option == UNREGISTER_THREAD) 
                 {
-                    current_thread_num --
-			    }
-			}
+                    thread_list.RemoveObjectFromList(thread_obj)
+                } 
+                
+                // 注册线程
+                else if (option == REGISTER_THREAD) 
+                {
+                    thread_list.AddObjectToList(thread_obj)
+                } 
+
+                // 启动指定线程
+                else if (option == LAUNCH_SINGLE_THREAD)
+                {
+                    AddMainThreadSingleTask(thread_obj, "terminate", 0)
+                }
+                
+                // 启动所有线程
+                else if (option == LAUNCH_ALL_THREAD)
+                {
+                    number count = thread_list.SizeOfList()
+                    for (number i = 0; i < count; i++) {
+	                    object thread_obj = thread_list.ObjectAt(i)
+                        thread_obj.StartThread()
+                    }
+                }
+
+                // 停止单个线程
+                else if (option == STOP_SINGLE_THREAD)
+                {
+                    thread_obj.StartThread()
+                }
+
+                // 停止所有线程
+                else if (option == STOP_ALL_THREAD) 
+                {
+                    number count = thread_list.SizeOfList()
+                    for (number i = 0; i < count; i++) {
+	                    object thread_obj = thread_list.ObjectAt(i)
+                        AddMainThreadSingleTask(thread_obj, "terminate", 0)
+                    }
+                }
+
+                // 增加线程个数
+                else if (option == INCREASE_RUNNING_THREAD_NUM)
+                {
+                    running_thread_num ++
+                }
+
+                // 减少运行线程个数
+                else if (option == DECREASE_RUNNING_THREAD_NUM)
+                {
+                    running_thread_num --
+                }
+
+                // 查询运行线程总数
+                else if (option == SELECT_RUNNING_THREAD_NUM)
+                {
+                    thread_msg = thread_msg.Init(null, running_thread_num)
+                }
+
+                // 查询注册线程总数
+                else if (option == SELECT_REGISTER_THREAD_NUM)
+                {
+                    number count = thread_list.SizeOfList()
+                    thread_msg = thread_msg.Init(null, count)
+                }
+            }
 		}
+
+        // 线程退出，检查是否还存在运行线程
+        number count = thread_list.SizeOfList()
+        if (count > 0) {
+            Logger.debug(413, "Teminating " + name + ", shutdown running thread")
+            for (number i = 0; i < count; i++) 
+            {
+	            object thread_obj = thread_list.ObjectAt(i)
+                AddMainThreadSingleTask(thread_obj, "terminate", 0)
+            }
+        }
+        Logger.debug(420, name + " terminated")
+        
     }
 
-    number increase(object self)
+    // 停止线程管理器 
+    void terminate(object self)
     {
-        thread_register_queue.PostMessage(inc_msg)
+        is_terminated = 1
     }
 
-    number decrease(object self)
+    // 注销线程
+    void unregister(object self, object thread_obj)
     {
-        thread_register_queue.PostMessage(dec_msg)
+        object thread_msg = thread_msg_prototype.ScriptObjectClone().Init(thread_obj, UNREGISTER_THREAD)
+        thread_mq.PostMessage(thread_msg)
     }
 
-    number count_thread_num(object self)
+    // 注册线程
+    void register(object self, object thread_obj)
     {
-        return current_thread_num
+        object thread_msg = thread_msg_prototype.ScriptObjectClone().Init(thread_obj, REGISTER_THREAD)
+        thread_mq.PostMessage(thread_msg)
     }
+
+    // 停止所有线程
+    void stop(object self)
+    {
+        object thread_msg = thread_msg_prototype.ScriptObjectClone().Init(null, STOP_ALL_THREAD)
+        thread_mq.PostMessage(thread_msg)
+    }
+
+    // 停止某一个线程
+    void stop(object self, object thread_obj)
+    {
+        object thread_msg = thread_msg_prototype.ScriptObjectClone().Init(thread_obj, STOP_SINGLE_THREAD)
+        thread_mq.PostMessage(thread_msg)
+    }
+
+    // 启动所有线程
+    void launch(object self)
+    {
+        object thread_msg = thread_msg_prototype.ScriptObjectClone().Init(null, LAUNCH_ALL_THREAD)
+        thread_mq.PostMessage(thread_msg)
+    }
+
+    // 启动所有线程
+    void launch(object self, object thread_obj)
+    {
+        object thread_msg = thread_msg_prototype.ScriptObjectClone().Init(thread_obj, LAUNCH_SINGLE_THREAD)
+        thread_mq.PostMessage(thread_msg)
+    }
+
+    void increase(object self) {
+        object thread_msg = thread_msg_prototype.ScriptObjectClone().Init(null, INCREASE_RUNNING_THREAD_NUM)
+        thread_mq.PostMessage(thread_msg)
+    }
+
+    void decrease(object self) {
+        object thread_msg = thread_msg_prototype.ScriptObjectClone().Init(null, DECREASE_RUNNING_THREAD_NUM)
+        thread_mq.PostMessage(thread_msg)
+    }
+
+    string getName(object self)
+    {
+        return name
+    }
+
 }
 
 // 线程管理器
-object thread_manager = alloc(ThreadManager).Init()
+object thread_manager = alloc(ThreadManager).Init("Main Thread Manager")
 
 // ===========================================================================
 // 输入线程，负责创建和销毁输入管道文件，启动后定时从管道文件数据拉取数据到内存当中，
@@ -370,12 +581,9 @@ class InputThread : thread
             DeleteFile(input_pip_lock)
         CreateFile(input_pip_lock)
 
-        // 注册线程
-        thread_manager.increase()
-        Logger.debug(352, "InputThread done registered")
-
         // 初始化线程状态量
         is_terminated = 0
+        thread_manager.increase()
 
         // 消息线程主循环
         while (!is_terminated)
@@ -422,7 +630,6 @@ class InputThread : thread
                     {
                         // 格式不正确时能够正确处理异常情况
                         object request_message = message_adapter.convertToMessage(line)
-                        // logger.debug(414, "InputThread: Accepted message : [" + request_message.toString() + "]")
                         logger.debug(414, "InputThread: Accepted message : [" + message_adapter.convertToString(request_message) + "]")
                         // 将消息提交到队列
                         request_mq.PostMessage(request_message)
@@ -439,7 +646,6 @@ class InputThread : thread
                 // 关闭管道文件输入流，并且等待间隔
                 CloseFile(input_pip)
                 // 重新创建锁文件，避免循环读取文件内容
-                // result(input_pip_lock)
                 CreateFile(input_pip_lock)
             }
         }
@@ -454,7 +660,6 @@ class InputThread : thread
         if (DoesFileExist(input_pip_lock))
             DeleteFile(input_pip_lock)
 
-        // 注销线程
         thread_manager.decrease()
         Logger.debug(327, "InputThread: InputThread terminated")
     }
@@ -465,35 +670,389 @@ class InputThread : thread
     }
 }
 
+// ===========================================================================
+// 拍摄线程消息，控制拍摄线程停止或开始拍摄任务，以及提交参数
+// ===========================================================================
+class AcquireThreadMessage: object
+{
+    object request  // 请求消息
+    object response  // 响应消息
+
+    object init(object self, object request_, object response_,) 
+    {
+        request = request_
+        response = response_
+		return self
+	}
+
+	object getRequest(object self) 
+    {
+		return request
+	}
+    
+    object getResponse(object self)
+    {
+        return response
+    }
+}
+
+// ===========================================================================
+// 拍摄任务，在线程中执行
+// ===========================================================================
+class AcquireTask: object
+{
+    object response  // 触发回调使用
+    number camID  // 使用相机的id
+    number exposure  // 曝光度
+    number xBin  // x方向binning
+    number yBin  // y方向binning
+    number processing  // 处理过程
+    number areaT  // 顶部边界坐标
+    number areaL  // 左部边界坐标
+    number areaB  // 底部边界坐标
+    number areaR  // 右部边界坐标
+
+    object Init(object self, object response_, number camID_, number exposure_, number xBin_, number yBin_, number processing_, number areaT_, number areaL_, number areaB_, number areaR_) {
+        response = response_
+        camID = camID_
+        exposure = exposure_
+        xBin = xBin_
+        yBin = yBin_
+        processing = processing_
+        areaT = areaT_
+        areaL = areaL_
+        areaB = areaB_
+        areaR = areaR_
+        return self
+    }
+
+    object getResponse(object self) 
+    {
+        return response  // 触发回调使用
+    }  
+
+    void doCameraAcquire(object self)
+    {
+        // CameraAcquire( camID, exposure, xBin, yBin, processing, areaT, areaL, areaB, areaR )
+        // 模拟耗时任务
+        sleep(0.5)
+    }
+}
+
+// 拍摄任务消息队列
+object acquire_task_mq = NewMessageQueue()
+
+interface parent {
+    void increase(object self);
+    void decrease(object self);
+}
+
+// ===========================================================================
+// 拍摄线程，根据提交的任务执行拍摄，以池的方式运行
+// ===========================================================================
+class AcquireThread: thread
+{
+    number is_terminated  // 线程停止信号量
+    object parent
+
+    object Init(object self, object parent_)
+    {
+        is_terminated = 0
+        parent = parent_
+        return self
+    }
+
+    void RunThread(object self)
+    {
+        // 初始化状态量
+        is_terminated = 0
+        parent.increase()
+
+        while (!is_terminated)
+        {
+            object acquire_task = acquire_task_mq.WaitOnMessage(2, null)  // 获取拍摄任务
+            if (acquire_task.ScriptObjectIsValid())
+            {
+                object response = acquire_task.getResponse()
+                acquire_task.doCameraAcquire()
+
+                // 每次拍摄完成进行响应
+                response.set("message", "Done")
+                response.set("code", "200")
+                response_mq.PostMessage(response)
+            }
+        }
+
+        // 线程退出
+        parent.decrease()
+    }
+
+    void terminate(object self)
+    {
+        is_terminated = 1
+    }
+}
+
+// ===========================================================================
+// 连拍管理器，提供多线程拍摄，支持XY横移连拍以及单点连续拍摄，守护线程
+// ===========================================================================
+class AcquireManager : thread
+{
+    string XY_CONTINUOUS_ACQUIRE
+    string SP_CONTINUOUS_ACQUIRE
+    string STOP_CONTINUOUS_ACQUIRE
+
+    number is_terminated  // 线程停止信号量
+    number is_running  // 执行任务信号量
+    object thread_mq  // 操作任务
+    number thread_num  // 启用多少条线程执行拍摄任务
+    object acquire_thread_manager  // 任务线程管理器，管理所有任务线程
+
+    object acquire_thread_message_prototype  // 连拍管理器消息
+    object acquire_task_prototype
+
+    object Init(object self) 
+    {
+        XY_CONTINUOUS_ACQUIRE = "XYContinuousAcquire"
+        SP_CONTINUOUS_ACQUIRE = "SPContinuousAcquire"
+        STOP_CONTINUOUS_ACQUIRE = "StopContinuousAcquire"
+
+        is_terminated = 0
+        thread_mq = NewMessageQueue()
+        thread_num = config.get("acquire_thread_num").val()
+        acquire_thread_manager = alloc(ThreadManager).Init("Acquire Thread Manager")
+        
+
+        acquire_thread_message_prototype = alloc(AcquireThreadMessage)  // 连拍管理器消息
+        acquire_task_prototype = alloc(AcquireTask)
+
+        // 注册线程
+        for (number i = 0; i < thread_num; i ++)
+        {
+            object acquire_thread = alloc(AcquireThread).Init(acquire_thread_manager)
+            acquire_thread_manager.register(acquire_thread)
+        }
+
+        return self
+    }
+
+    void RunThread(object self) 
+    {
+        
+        is_terminated = 0  // 初始化信号量
+        acquire_thread_manager.StartThread()  // 注册线程
+
+        while (!is_terminated)
+        {
+            object thread_message = thread_mq.WaitOnMessage(2, null)
+            if (thread_message.ScriptObjectIsValid())
+            {
+                object request = thread_message.getRequest()
+                object response = thread_message.getResponse()
+
+                string option = request.getHeader("option")
+                // 判断是否成功获取操作名
+                if (option == null) {
+                    // 未设置操作名
+                    response.set("code", "400")
+                    response.set("message", "'Option' cannot be found in request head")
+                    response_mq.PostMessage(response)  // 返回消息
+                }
+
+                number camID = request.get("cam_id").val()  // 准备相机
+                // CameraPrepareForAcquire(camID)
+
+                number exposure = request.get("exposure").val()
+                number x_bin = request.get("x_bin").val()
+                number y_bin = request.get("y_bin").val()
+
+                number x_size, y_size  // 获取相机参数
+                // CameraGetSize(CamID, x_size, y_size)
+                x_size = 4096
+                y_size = 4096
+
+                x_size = math_utils.floor(x_size / x_bin)  // 计算binning
+                y_size = math_utils.floor(y_size / y_bin)
+
+                // 坐标计算
+                if (option == XY_CONTINUOUS_ACQUIRE)  // XY轴横移连拍
+                {
+                    // 计算拍摄坐标提交给消息队列
+                    number enable_extension = request.get("enable_extension").val()
+                    number extension_unit = request.get("extension_unit").val()
+                    number x_off = request.get("x_off").val()
+                    number y_off = request.get("y_off").val()
+                    number x_split = request.get("x_split").val()
+                    number y_split = request.get("y_split").val()
+
+                    // 计算步长
+                    number x_step = math_utils.floor(x_size / x_split)
+                    number y_step = math_utils.floor(y_size / y_split)
+
+                    // 行循环
+                    for (number line_num = 0; line_num < x_split; line_num ++) 
+                    {
+                        // 列循环
+                        for (number col_num = 0; col_num < y_split; col_num ++)
+                        {
+                            number areaT = line_num * y_step
+                            number areaL = col_num * x_step
+                            number areaB = (line_num + 1) * y_step
+                            number areaR = (col_num + 1) * x_step
+
+                            if (enable_extension && (x_off != 0 || y_off != 0))
+                            {
+                                if (extension_unit == 0)
+                                {
+                                    // 像素拓展，向四周拓展
+                                    areaT -= y_off
+                                    areaL -= x_off
+                                    areaB += y_off
+                                    areaR += x_off
+                                }
+                                
+                                else if (extension_unit == 1) 
+                                {
+                                    // 百分比拓展，需要计算出拓展的像素
+                                    number v_off = math_utils.floor(y_step * (0.01 * x_off))
+                                    number h_off = math_utils.floor(x_step * (0.01 * x_off))
+
+                                    areaT -= v_off
+                                    areaL -= h_off
+                                    areaB += v_off
+                                    areaR += h_off                                
+                                }
+                            }
+
+                            // 对坐标的圆整，注意无法访问边界坐标
+                            areaT = math_utils.clamp(areaT, 0, y_size - 1)
+                            areaL = math_utils.clamp(areaL, 0, x_size - 1)
+                            areaB = math_utils.clamp(areaB, areaT, y_size - 1)
+                            areaR = math_utils.clamp(areaR, areaL, x_size - 1)
+
+                            object response_ = response.ScriptObjectClone()
+                            object acquire_task = acquire_task_prototype.ScriptObjectClone()
+                            // 创建消息
+                            // number processing = CameraGetGainNormalizedEnum( ) 
+                            number processing = 1
+                            acquire_task = acquire_task.Init(response_, camID, exposure, x_bin, y_bin, processing, areaT, areaL, areaB, areaR)
+                            // 提交任务
+                            acquire_task_mq.PostMessage(acquire_task)
+                        }
+                    }
+                }
+
+                else if (option == SP_CONTINUOUS_ACQUIRE)  // 单点连续拍摄
+                {
+                        
+                }
+
+                else if (option == STOP_CONTINUOUS_ACQUIRE)  // 停止连续拍摄
+                {
+                        
+                }
+            }
+        }
+
+        // 线程退出
+        acquire_thread_manager.stop()  // 停用所有子线程
+    }
+
+    // 停止所有任务线程
+    void stop(object self)
+    {
+        acquire_thread_manager.stop()
+    }
+
+    // 启用所有任务线程
+    void launch(object self)
+    {
+        acquire_thread_manager.launch()
+    }
+
+    // 统计运行线程数
+    number getRunningThreadNum(object self)
+    {
+        return acquire_thread_manager.getRunningThreadNum()
+    }
+
+    void countRegisterThreadNum(object self)
+    {
+        acquire_thread_manager.countRegisterThreadNum()
+    }
+
+    // 统计注册线程数
+    number getRegisterThreadNum(object self)
+    {
+        return acquire_thread_manager.getRegisterThreadNum()
+    }
+
+    void submit(object self, object request, object response)
+    {
+        object thread_message = acquire_thread_message_prototype.ScriptObjectClone()
+        thread_message = thread_message.Init(request, response)
+        thread_mq.PostMessage(thread_message)
+    }
+
+    void terminate(object self) 
+    {
+        acquire_thread_manager.terminate()  // 停止任务线程管理器
+        is_terminated = 1
+    }
+
+    void join(object self)
+    {
+        acquire_thread_manager.join()
+    }
+
+    void await(object self)
+    {
+        acquire_thread_manager.await()
+    }
+
+    string getName(object self)
+    {
+        return acquire_thread_manager.getName()
+    }
+}
+
+object acquire_manager = alloc(AcquireManager).Init()  // 拍摄管理器
 
 // ===========================================================================
 // DM任务派发器，封装了请求消息，通过这个类来将操作派发到某个具体的功能上
 // ===========================================================================
-class DMTaskDispatcher
+class DMTaskDispatcher: object
 {
-    object message
+    object request
+    object response
 
     void setRequestMessage(object self, object request_message)
     {
-        message = request_message
+        request = request_message
+        response = message_adapter.allocWithHead(request)
     }
 
-    // TODO: 添加功能方法 
     // ================== 功能定义 ======================
     // 未找到资源
     void NotFound(object self)
     {
-        message.set("message", "Unable accessing target resources")
-        message.set("code", "404")
-        response_mq.PostMessage(message)
+        response.set("message", "Unable accessing target resources")
+        response.set("code", "404")
+        response_mq.PostMessage(response)
     }
 
     // 消息头部解析错误
     void InvalidMessageException(object self)
     {
-        message.set("message","Unable parsing message, check if message is in correctly writting")
-        message.set("code", "400")
-        response_mq.PostMessage(message)
+        response.set("message","Unable parsing message, check if message is in correctly writting")
+        response.set("code", "400")
+        response_mq.PostMessage(response)
+    }
+
+    // 连拍任务，提交给连拍处理器
+    void ContinuousAcquire(object self)
+    {
+        acquire_manager.submit(request, response) // 提交任务
     }
 
 }
@@ -520,13 +1079,9 @@ class TaskThread : thread
 
     void RunThread(object self)
     {
-
-        // 注册线程
-        thread_manager.increase()
-        Logger.debug(510, "TaskThread done registered")
-
         // 初始化线程状态量
         is_terminated = 0
+        thread_manager.increase()
 
         while (!is_terminated)
         {
@@ -552,7 +1107,7 @@ class TaskThread : thread
                 catch
                 {
                     // 如果没有找到操作名，引导至NotFound
-                    Logger.debug(538, "TaskThread: Unsupported operation name, lead to NotFound")
+                    Logger.debug(1111, "TaskThread: Unsupported operation name, lead to NotFound")
                     number task_id = AddMainThreadSingleTask(dm_task_dispatcher, "NotFound", 0)
                     break
                 }
@@ -561,8 +1116,6 @@ class TaskThread : thread
 
         // 主循环结束，退出循环
         Logger.debug(384, "TaskThread: TaskThread terminating...")
-
-        // 注销线程
         thread_manager.decrease()
         Logger.debug(385, "TaskThread: TaskThread terminated")
     }
@@ -612,12 +1165,10 @@ class OutputThread : thread
             DeleteFile(output_pip_lock)
         CreateFile(output_pip_lock)
 
-        // 注册线程
-        thread_manager.increase()
-        Logger.debug(607, "OutputThread done registered")
-
         // 初始化线程状态量
         is_terminated = 0
+        thread_manager.increase()
+        logger.debug(744, "Output thread waiting for wrtting output message")
 
         // 提取响应并且写入输出文件当中
         while (!is_terminated)
@@ -688,7 +1239,6 @@ class OutputThread : thread
         if (DoesFileExist(output_pip_lock))
             DeleteFile(output_pip_lock)
 
-        // 注销线程
         thread_manager.decrease()
         Logger.debug(545, "OutputThread: OutputThread terminated")
     }
@@ -704,25 +1254,31 @@ object input_thread = alloc(InputThread).init()  // 输入线程
 object task_thread = alloc(TaskThread).init()  // 任务线程
 object output_thread = alloc(OutputThread).init()  // 输出线程
 
-// object input_thread  // 输入线程
-// object task_thread  // 任务线程
-// object output_thread  // 输出线程
+// 程序初始化
+void init() {
+    // 启动主线程管理器
+    logger.debug(836, "Launching Main Thread Manager")
+    thread_manager.StartThread()
+    logger.debug(838, "Done")
 
-// 启动程序
-void launch() {
-    thread_manager.StartThread()  // 线程管理器
+    // 启动拍摄线程管理器
+    logger.debug(836, "Launching Acquire Thread Manager")
+    acquire_manager.StartThread()
+    logger.debug(838, "Done")
 
-    input_thread.StartThread()
-    task_thread.StartThread()
-    output_thread.StartThread()
-}
+    thread_manager.register(input_thread)
+    Logger.debug(841, "InputThread registered into " + thread_manager.getName())
+    thread_manager.register(task_thread)
+    Logger.debug(843, "TaskThread registered into " + thread_manager.getName())
+    thread_manager.register(output_thread)
+    Logger.debug(845, "OutputThread registered into " + thread_manager.getName())
+    
+    sleep(0.3)
+    thread_manager.countRegisterThreadNum()
+    acquire_manager.countRegisterThreadNum()
 
-// 终止程序
-void shutdown()
-{
-    input_thread.terminate()
-    task_thread.terminate()
-    output_thread.terminate()
+    logger.debug(1124, thread_manager.getName() + " current register thread num : " + thread_manager.getRegisterThreadNum())
+    logger.debug(1124, acquire_manager.getName() + " current register thread num : " + acquire_manager.getRegisterThreadNum())
 }
 
 // ===========================================================================
@@ -730,22 +1286,18 @@ void shutdown()
 // ===========================================================================
 class GUI : UIFrame
 {
-
-    // 程序状态量，表示是否启动程序
-    number is_launched
+    number is_terminated  // 程序状态量，表示是否启动程序
 
     // 程序析构函数，如果GUI被关闭，应该终止程序执行 
     ~GUI(object self) 
     {
-        if (is_launched) {
-            shutdown()  // 关闭程序
-            logger.debug(600, "Shutdown Program due to gui closed")
-        }
+        thread_manager.terminate()
+        acquire_manager.terminate()
+        is_terminated = 1
     }
 
     TagGroup CreateDLGTagGroup(object self)
     {
-        // Dialog building method
         TagGroup DLGtgs, DLGItems
         DLGtgs = DLGCreateDialog("CDialog", DLGItems)
 
@@ -770,7 +1322,7 @@ class GUI : UIFrame
     object LaunchAsModelessDialog(object self)
     {
 
-        is_launched = 0  // 初始化状态量
+        is_terminated = 1  // 初始化状态量
 
         self.init(self.CreateDLGTagGroup())
         self.Display("DM Process GUI")
@@ -779,45 +1331,43 @@ class GUI : UIFrame
     // Methods invoked by buttons
     void launch(object self)
     {
-        if (is_launched)
+        if (is_terminated)
         {
-            Logger.debug(640, "Cannot launch program as the program has already launched")
+            ClearResults()
+            Result(GetTime(1) + "| DEBUG    |<main>:1249 - Launching DM Script Process")
+            thread_manager.launch()
+            acquire_manager.launch()
+
+            // thread_manager.await()
+            // acquire_manager.await()
+
+            sleep(0.1)
+            logger.debug(1257, "Program threads all done register work!")
+            
+            is_terminated = 0
+            Logger.debug(1260, "DM Script Process launching successfully")
         }
         else
         {
-            ClearResults()
-            Result(GetTime(1) + "| DEBUG    |<main>:670 - Launching DM Script Process")
-            launch()  // 启动程序线程
-
-            while (1) {
-                if (thread_manager.count_thread_num() == 3)
-                    break
-            }
-
-            sleep(0.1)
-            logger.debug(785, "Program threads all done register work!")
-            
-            is_launched = 1
-            Logger.debug(640, "DM Script Process launching successfully")
+            Logger.debug(1264, "Cannot launch program as the program has already launched")
         }
     }
 
     void shutdown(object self)
     {
-        if (is_launched)
+        if (! is_terminated)
         {
-            Logger.debug(640, "Shutdown backend program")
-            shutdown()  // 关闭程序
+            Logger.debug(1200, "Shutdown backend program")
+            thread_manager.stop()  // 停止管道进程
+            acquire_manager.stop()  // 停止拍摄进程
 
-            while (1) {
-                if (thread_manager.count_thread_num() == 0)
-                    break
-            }
+            // thread_manager.join()
+            // acquire_manager.join()
 
             sleep(0.1)
             logger.debug(785, "Program threads all done register work!")
 
-            is_launched = 0
+            is_terminated = 1
             Logger.debug(640, "DM Script Process terminating successfully")
         }
         else
@@ -832,11 +1382,8 @@ class GUI : UIFrame
 // ===========================================================================
 void main(void)
 {
-
-    // initConfiguration()
-
-    // 判断是否启用gui
-    number enable_gui = config.get("enable_gui").val()
+    init()  // 初始化线程
+    number enable_gui = config.get("enable_gui").val()  // 判断是否启用gui
     if (enable_gui)
     {
         // 启动携带gui的后端程序
@@ -847,9 +1394,10 @@ void main(void)
     {
         // 如果不启用gui，那么程序将会在运行一段程序后自动停止
         Logger.debug(647, "Detect NOT enable gui, program will automatically stop in some time.")
-        launch()  // 启动程序
+        thread_manager.launch()  // 启动程序
         sleep(90)  // 模拟耗时任务
-        shutdown()  // 关闭程序
+        thread_manager.stop()  // 关闭程序
+        thread_manager.terminate()
     }
 }
 

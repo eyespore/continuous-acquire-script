@@ -91,6 +91,11 @@ class MessageProcessor(threading.Thread):
                 if self.is_terminated:
                     self.connection.close()
                     return
+            except ConnectionResetError as e:
+                logger.error('Detected connection reset')
+                self.connection.close()
+                return
+
         # 线程退出
         self.connection.close()
         logger.info('Connection Close, MessageProcessor out')

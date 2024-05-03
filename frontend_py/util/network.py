@@ -23,17 +23,17 @@ class Message:
     def __str__(self):
         return f'{self.head}->{self.body}'
 
-    def get(self, key: str) -> str:
-        return self.body[key]
+    def get(self, key) -> str:
+        return self.body[str(key)]
 
-    def set(self, key: str, val: str) -> None:
-        self.body[key] = val
+    def set(self, key, val) -> None:
+        self.body[str(key)] = str(val)
 
-    def setHeader(self, key: str, val: str):
-        self.head[key] = val
+    def setHeader(self, key, val):
+        self.head[str(key)] = str(val)
 
-    def getHeader(self, key: str):
-        return self.head[key]
+    def getHeader(self, key):
+        return self.head[str(key)]
 
     def getBody(self) -> Dict[str, str]:
         return self.body
