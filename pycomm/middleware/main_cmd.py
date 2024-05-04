@@ -278,21 +278,13 @@ class frontend_output_middleware(threading.Thread):
         global is_terminated
         while not is_terminated:
             try:
-                data = connection.recv(4096)
-                if not data:
+                length_prefix = connection.recv(4)
+                if not length_prefix:
                     break
-                if len(data) < 4:
-                    raise ValueError("Received packet is too small to contain pickle data.")
                 # 长度部分取前四个字节
-                length = int.from_bytes(data[:4:], byteorder='big')
-                if len(data) < length + 4:
-                    # 如果没有接收到完整的数据，继续接收余下部分
-                    # 注意这里没有设置缓冲区，需要避免接收过大体量的请求
-                    remaining = length + 4 - len(data)
-                    data += connection.recv(remaining)
-
-                # 解码对象，对象数据在四字节之后
-                message = pickle.loads(data[4:].strip())
+                length = int.from_bytes(length_prefix, byteorder='big')
+                message_data = connection.recv(length)
+                message = Message.loads(message_data.decode(encoding=server_encoding))
                 # 或取当前用户ip地址，为message设置
                 message.setHeader('address', f'{address[0]}:{address[1]}')
                 # 将消息转化为字符串格式加入队列中
@@ -343,7 +335,7 @@ class frontend_input_middleware(threading.Thread):
                 if not connection:
                     continue
 
-                data = pickle.dumps(response_message, protocol=pickle.HIGHEST_PROTOCOL)
+                data = Message.dumps(response_message).encode(encoding=server_encoding)
                 length = len(data).to_bytes(4, byteorder='big')
 
                 connection.sendall(length)  # 发送数据长度

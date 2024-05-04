@@ -7,6 +7,9 @@ from typing import Callable, Dict
 from loguru import logger
 
 from pycomm.util.network import Message
+from config_util import config
+
+server_encoding = config['server_encoding']
 
 
 class MessageProcessor(threading.Thread):
@@ -24,8 +27,6 @@ class MessageProcessor(threading.Thread):
         self.conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         logger.info(f'Connecting to MessageQueue Server on ')
         self.conn.connect((self.host, self.port))
-
-        self.total = 0
 
         self.timeout = timout
         self.conn.settimeout(self.timeout)
@@ -58,8 +59,11 @@ class MessageProcessor(threading.Thread):
         message.setHeader('task_id', task_id)
         self.callbacks[task_id] = callback
 
-        data = pickle.dumps(message, protocol=pickle.HIGHEST_PROTOCOL)  # 编码对象
+        # data = pickle.dumps(message, protocol=pickle.HIGHEST_PROTOCOL)  # 编码对象
+        data = Message.dumps(message).encode(encoding=server_encoding)
         length = len(data).to_bytes(4, byteorder='big')
+
+        # length = len(data).to_bytes(4, byteorder='big')
         self.conn.sendall(length)  # 发送数据长度
         self.conn.sendall(data)  # 发送数据
 
@@ -69,24 +73,17 @@ class MessageProcessor(threading.Thread):
         """
         while not self.is_terminated:
             try:
-                data = self.conn.recv(4096)
-                if not data:
+                length_prefix = self.conn.recv(4)
+                if not length_prefix:
                     break
-                if len(data) < 4:
-                    raise ValueError("Received packet is too small to contain pickle data.")
                 # 长度部分取前四个字节
-                length = int.from_bytes(data[:4:], byteorder='big')
-                if len(data) < length + 4:
-                    # 如果没有接收到完整的数据，继续接收余下部分
-                    # 注意这里没有设置缓冲区，需要避免接收过大体量的请求
-                    remaining = length + 4 - len(data)
-                    data += self.conn.recv(remaining)
-
-                self.total += 1
-                logger.debug(f'total message : {self.total}')
+                length = int.from_bytes(length_prefix, byteorder='big')
+                message_data = self.conn.recv(length)
 
                 # 解码对象，并且将对象解析为Message实例，传递给对应的执行函数
-                message = pickle.loads(data[4:])
+                # message = pickle.loads(data[4:])
+                message = Message.loads(message_data.decode(encoding=server_encoding))
+                # logger.debug(message)
                 task_id = message.getHeader('task_id')
 
                 callback = self.callbacks.get(task_id)

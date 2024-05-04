@@ -6,7 +6,7 @@ import cmd
 from loguru import logger
 
 from config_util import config
-from network_processor import MessageProcessor
+from data_processor import MessageProcessor
 
 logger.info(f'Launching MainCMD program by python')
 message_processor = MessageProcessor(config['server_host'], config['server_port'], config['server_timeout'])

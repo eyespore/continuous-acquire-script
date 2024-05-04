@@ -66,7 +66,7 @@ class Message:
         """
         try:
             msg = Message()  # 创建消息对象
-            head_n_body = line.split(Message.message_seperator)
+            head_n_body = line.strip().split(Message.message_seperator)
             if len(head_n_body) == 1:
                 head_str = ''  # 不包含消息头部
                 body_str = head_n_body[0]

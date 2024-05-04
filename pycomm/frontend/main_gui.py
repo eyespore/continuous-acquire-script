@@ -18,7 +18,7 @@ from loguru import logger
 from config_util import config
 from pycomm.util.math_util import MathUtil
 from pycomm.util.network import Message
-from network_processor import MessageProcessor
+from data_processor import MessageProcessor
 
 logger.info(f'Launching frontend process by python')
 QtCore.QCoreApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling)  # 修正窗口界面尺寸
@@ -264,12 +264,12 @@ class Gui(QWidget):
         # 查询当前运行模式
         if self.status == Status.TERMINABLE:
             # 停止连续拍摄
-            # self.set_status(Status.UNAVAILABLE)
+            self.set_status(Status.UNAVAILABLE)
             ...
 
         # 如果状态为VANILLA，那么根据当前界面来决定执行
         if self.status == Status.VANILLA:
-            # self.set_status(Status.UNAVAILABLE)
+            self.set_status(Status.UNAVAILABLE)
             current_tab = self.components['mode_tab'].currentIndex()
             if current_tab == self.TAB_XY_CONTINUOUS_NUM:
                 self.xy_acquire()  # xy坐标横移连拍
@@ -324,12 +324,12 @@ class Gui(QWidget):
             position = MathUtil.clamp(round(100 / self.task_num * self.done_task_num), 0, 100)
             self.progress_signal.emit(position)
 
-            # logger.debug(f'done task: {self.done_task_num} / {self.task_num}')
+            logger.debug(f'done task: {self.done_task_num} / {self.task_num}')
 
             if self.done_task_num >= self.task_num:
                 self.progress_signal.emit(100)
                 self.log_signal.emit('Done xy acquire task!')
-                # self.set_status(Status.VANILLA)
+                self.set_status(Status.VANILLA)
         finally:
             self.lock.release()
 

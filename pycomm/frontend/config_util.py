@@ -77,3 +77,4 @@ with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
     load_val('server_host', lambda: yml_cfg['server']['host'], '127.0.0.1')
     load_val('server_port', lambda: yml_cfg['server']['port'], 25565)
     load_val('server_timeout', lambda: yml_cfg['server']['timeout'], 3)
+    load_val('server_encoding', lambda: yml_cfg['server']['encoding'], 'utf-8')
