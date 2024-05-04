@@ -3,26 +3,27 @@ Created on 2024.4.9
 @author: Pineclone
 """
 import sys
+import threading
 from datetime import datetime
 from enum import Enum
 from typing import List
 
-from PyQt5 import QtCore, QtWidgets
+from PyQt5 import QtCore
 from PyQt5 import uic
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QIntValidator, QFont
 from PyQt5.QtWidgets import *
 from loguru import logger
 
-from util.config_util import config
-from util.math_util import MathUtil
-from util.network_util import Message, MessageProcessor
-from util.component_util import ScaleProcessBar
+from config_util import config
+from pycomm.util.math_util import MathUtil
+from pycomm.util.network import Message
+from network_processor import MessageProcessor
 
 logger.info(f'Launching frontend process by python')
 QtCore.QCoreApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling)  # 修正窗口界面尺寸
 
-MENU_UI_PATH = f'./main_gui.ui'  # 菜单UI路径设定
+MENU_UI_PATH = f'main_gui.ui'  # 菜单UI路径设定
 DEF_FONT = QFont(config['font'], config['font_size'])  # 字体设定
 DEF_WINDOW_TITLE = 'Continuous Acquire Scripts'  # 窗口标题设置
 DEF_WIDTH_WITHOUT_LOG = 350  # 窗口大小设置
@@ -52,15 +53,17 @@ class Gui(QWidget):
     # 渲染主界面
     def __init__(self):
         super().__init__()
+        self.client = None  # 消息转发
         logger.debug('Launching Main Thread')
         uic.loadUi(MENU_UI_PATH, self)
         self.setWindowTitle(DEF_WINDOW_TITLE)
         self.components = self.__dict__  # 将组件作为对象属性
         self.log_cache: List[str] = []  # 程序输出窗口信息缓存
-        self.message_processor: MessageProcessor  # 网络连接
+        self.client: MessageProcessor  # 网络连接
 
         self.done_task_num = 0  # 完成任务数
         self.task_num = 0  # 运行任务数
+        self.lock = threading.Lock()  # 全局锁
 
         logger.debug('Initializing GUI')
         self.init_gui()  # 初始化GUI界面
@@ -113,11 +116,13 @@ class Gui(QWidget):
 
         # 日志信号，控制日志输出
         self.log_signal.connect(self.print_log)
+        # 渲染进度条
+        self.progress_signal.connect(self.set_progress)
 
     def init_network(self):
         # 网络初始化
-        self.message_processor = MessageProcessor(config)
-        self.message_processor.start()
+        self.client = MessageProcessor(config['server_host'], config['server_port'], config['server_timeout'])
+        self.client.start()
 
     def init_font(self):
         # 初始化字体
@@ -223,7 +228,7 @@ class Gui(QWidget):
 
     def closeEvent(self, event):
         logger.debug('Closing network connection')
-        self.message_processor.terminate()
+        self.client.terminate()
         # self.message_processor.join()
         logger.debug('Frontend process successfully terminated')
         event.accept()
@@ -240,7 +245,7 @@ class Gui(QWidget):
         # self.print_log('loading cameras')
         self.init_camera_combo_box()
 
-    def set_progress_bar_val(self, val: int):
+    def set_progress(self, val: int):
         self.components['progress_bar'].setValue(MathUtil.clamp(val, 0, 100))  # 设置进度条
 
     # 清除控制台输出
@@ -259,12 +264,12 @@ class Gui(QWidget):
         # 查询当前运行模式
         if self.status == Status.TERMINABLE:
             # 停止连续拍摄
-            self.set_status(Status.UNAVAILABLE)
-            self.acquire_thread.terminating_signal.emit()
+            # self.set_status(Status.UNAVAILABLE)
+            ...
 
         # 如果状态为VANILLA，那么根据当前界面来决定执行
         if self.status == Status.VANILLA:
-            self.set_status(Status.UNAVAILABLE)
+            # self.set_status(Status.UNAVAILABLE)
             current_tab = self.components['mode_tab'].currentIndex()
             if current_tab == self.TAB_XY_CONTINUOUS_NUM:
                 self.xy_acquire()  # xy坐标横移连拍
@@ -273,13 +278,17 @@ class Gui(QWidget):
                 self.sp_acquire()  # 单点连拍
 
     def xy_acquire(self):
-        self.set_progress_bar_val(0)  # 清空进度条
+        self.progress_signal.emit(0)  # 清空进度条
         # cam_name = self.components['camera_combo_box'].currentText()
         # cam_id = cam_name  # 当前使用相机id，从下拉菜单获取
         cam_id = 1
         enable_extension = self.components['enable_extension'].isChecked()  # 是否启用拓展
         x_split = self.components['x_splitting_format'].value()  # 分片数量
         y_split = self.components['y_splitting_format'].value()
+
+        # 初始化任务
+        self.done_task_num = 0
+        self.task_num = x_split * y_split
 
         x_off, y_off, extension_unit = 0, 0, 0  # 拓展单位和拓展量
         if enable_extension:
@@ -293,7 +302,7 @@ class Gui(QWidget):
 
         message = Message()
         message.setHeader('name', 'ContinuousAcquire')
-        message.setHeader('option', 'XYContinuousAcquire')
+        message.setHeader('option', 0)
         message.set('cam_id', cam_id)
         message.set('enable_extension', 1 if enable_extension else 0)
         message.set('extension_unit', extension_unit)
@@ -305,15 +314,27 @@ class Gui(QWidget):
         message.set('x_split', x_split)
         message.set('y_split', y_split)
 
-        self.message_processor.send_msg(message, self.xy_acquire_callback)
+        self.client.send_msg(message, self.xy_acquire_callback)
 
     def xy_acquire_callback(self, response: Message):
-        self.log_signal.emit('Hello World')
-        # logger.debug(response)
-        self.set_status(Status.VANILLA)
+        self.lock.acquire()
+        try:
+            self.done_task_num += 1
+            # 渲染进度条
+            position = MathUtil.clamp(round(100 / self.task_num * self.done_task_num), 0, 100)
+            self.progress_signal.emit(position)
+
+            # logger.debug(f'done task: {self.done_task_num} / {self.task_num}')
+
+            if self.done_task_num >= self.task_num:
+                self.progress_signal.emit(100)
+                self.log_signal.emit('Done xy acquire task!')
+                # self.set_status(Status.VANILLA)
+        finally:
+            self.lock.release()
 
     def sp_acquire(self):
-        self.set_progress_bar_val(0)  # 清空进度条
+        self.set_progress(0)  # 清空进度条
         # cam_name = self.components['camera_combo_box'].currentText()
         # cam_id = cam_name  # 相机id
         cam_id = 1
@@ -335,7 +356,7 @@ class Gui(QWidget):
         # 构建消息
         message = Message()
         message.setHeader('name', 'ContinuousAcquire')
-        message.setHeader('option', 'SPContinuousAcquire')
+        message.setHeader('option', 1)
         message.set('cam_id', cam_id)
         message.set('pos_top', pos_top)
         message.set('pos_left', pos_left)
@@ -349,7 +370,7 @@ class Gui(QWidget):
         message.set('x_bin', x_bin)
         message.set('y_bin', y_bin)
 
-        self.message_processor.send_msg(message, self.sp_acquire_callback)
+        self.client.send_msg(message, self.sp_acquire_callback)
 
     def sp_acquire_callback(self, response: Message):
         print(response)

@@ -5,13 +5,14 @@ import yaml
 前端进程配置类
 """
 config = {}  # 程序配置字典，通过字典来获取程序配置
-CONFIG_PATH = f'./util/config.yaml'  # yaml配置文件路径设定
+CONFIG_PATH = f'./config.yaml'  # yaml配置文件路径设定
 
 # 尝试读取配置，如果配置存在错误则会采用默认配置
 with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
     yml_cfg = yaml.safe_load(f)
 
     logger.debug(f'Loading config, yaml config path: {CONFIG_PATH}')
+
 
     def load_val(val_path, yml_sup, def_val):
         # 加载配置文件并且将值用于参数初始化

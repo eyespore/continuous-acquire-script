@@ -2,18 +2,18 @@
 简易实现的命令行操作界面，提供通过命令行操作的方式来向中间件发送消息
 """
 import cmd
+
 from loguru import logger
 
-from util.config_util import config
-from util.network_util import MessageProcessor
-from util.network import Message
+from config_util import config
+from network_processor import MessageProcessor
 
 logger.info(f'Launching MainCMD program by python')
-message_processor = MessageProcessor(config)
+message_processor = MessageProcessor(config['server_host'], config['server_port'], config['server_timeout'])
 
 
-def when_recv(message: Message):
-    logger.info(message)
+def when_recv(message):
+    pass
 
 
 class MainCmd(cmd.Cmd):

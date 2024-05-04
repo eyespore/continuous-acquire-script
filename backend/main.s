@@ -671,36 +671,11 @@ class InputThread : thread
 }
 
 // ===========================================================================
-// 拍摄线程消息，控制拍摄线程停止或开始拍摄任务，以及提交参数
-// ===========================================================================
-class AcquireThreadMessage: object
-{
-    object request  // 请求消息
-    object response  // 响应消息
-
-    object init(object self, object request_, object response_,) 
-    {
-        request = request_
-        response = response_
-		return self
-	}
-
-	object getRequest(object self) 
-    {
-		return request
-	}
-    
-    object getResponse(object self)
-    {
-        return response
-    }
-}
-
-// ===========================================================================
-// 拍摄任务，在线程中执行
+// 拍摄任务
 // ===========================================================================
 class AcquireTask: object
 {
+    object request
     object response  // 触发回调使用
     number camID  // 使用相机的id
     number exposure  // 曝光度
@@ -712,7 +687,8 @@ class AcquireTask: object
     number areaB  // 底部边界坐标
     number areaR  // 右部边界坐标
 
-    object Init(object self, object response_, number camID_, number exposure_, number xBin_, number yBin_, number processing_, number areaT_, number areaL_, number areaB_, number areaR_) {
+    object Init(object self, object request_, object response_, number camID_, number exposure_, number xBin_, number yBin_, number processing_, number areaT_, number areaL_, number areaB_, number areaR_) {
+        request = request_
         response = response_
         camID = camID_
         exposure = exposure_
@@ -731,6 +707,11 @@ class AcquireTask: object
         return response  // 触发回调使用
     }  
 
+    object getRequest(object self)
+    {
+        return request
+    }
+
     void doCameraAcquire(object self)
     {
         // CameraAcquire( camID, exposure, xBin, yBin, processing, areaT, areaL, areaB, areaR )
@@ -742,9 +723,9 @@ class AcquireTask: object
 // 拍摄任务消息队列
 object acquire_task_mq = NewMessageQueue()
 
-interface parent {
-    void increase(object self);
-    void decrease(object self);
+interface validator {
+    // 验证当前请求是否合法，合法返回1，不合法返回0
+    number validate(object self, object request, object response);
 }
 
 // ===========================================================================
@@ -753,12 +734,12 @@ interface parent {
 class AcquireThread: thread
 {
     number is_terminated  // 线程停止信号量
-    object parent
+    object validators  // 验证器链
 
-    object Init(object self, object parent_)
+    object Init(object self)
     {
         is_terminated = 0
-        parent = parent_
+        validators = alloc(ObjectList)
         return self
     }
 
@@ -766,7 +747,6 @@ class AcquireThread: thread
     {
         // 初始化状态量
         is_terminated = 0
-        parent.increase()
 
         while (!is_terminated)
         {
@@ -774,8 +754,16 @@ class AcquireThread: thread
             if (acquire_task.ScriptObjectIsValid())
             {
                 object response = acquire_task.getResponse()
-                acquire_task.doCameraAcquire()
+                object request = acquire_task.getRequest()
 
+                for (number i = 0; i < validators.SizeOfList(); i ++)
+                {
+                    object validator = validators.ObjectAt(i)
+                    if ( ! validator.validate(request, response))
+                        continue
+                }
+
+                acquire_task.doCameraAcquire()  // 执行拍摄
                 // 每次拍摄完成进行响应
                 response.set("message", "Done")
                 response.set("code", "200")
@@ -784,7 +772,11 @@ class AcquireThread: thread
         }
 
         // 线程退出
-        parent.decrease()
+    }
+
+    void addValidator(object self, object validator)
+    {
+        validators.AddObjectToList(validator)
     }
 
     void terminate(object self)
@@ -794,70 +786,139 @@ class AcquireThread: thread
 }
 
 // ===========================================================================
-// 连拍管理器，提供多线程拍摄，支持XY横移连拍以及单点连续拍摄，守护线程
+// 拍摄线程管理器消息
+// ===========================================================================
+class AcquireManagerMessage: object
+{
+    object request
+    object response
+
+    object Init(object self, object request_, object response_) 
+    {
+        request = request_
+        response = response_
+		return self
+	}
+
+    object getRequest(object self)
+    {
+        return request
+    }
+
+    object getResponse(object self)
+    {
+        return response
+    }
+}
+
+// ===========================================================================
+// IP地址验证器，用于禁用某个ip地址的请求
+// ===========================================================================
+class AddressValidator: object
+{
+    object lock
+    taggroup filter  // 地址过滤
+
+    object Init(object self)
+    {
+        lock = NewCriticalSection()
+        filter = NewTagGroup()
+        return self
+    }
+
+    // 对任务进行验证，通过返回码判断是否合法
+    number validate(object self, object reqeust, object response) 
+    {
+        object lock_ = lock.acquire()
+        if ( ! filter.TaggroupDoesTagExist(reqeust.getHeader("address")))
+            return 1
+        else 
+        {
+            // 响应消息
+            response.set("code", "403")
+            response.set("message", "Reqeust Forbidden, server received the request but reject handling")
+            response_mq.PostMessage(response)
+        }
+        return 0
+    }
+
+    // 禁用某个address下的所有请求
+    void rejectAddress(object self, string address)
+    {
+        object lock_ = lock.acquire()
+        filter.TaggroupSetTagAsString(address, "reject")
+    }  
+
+    // 放行某个address下的所有请求
+    void permitAddress(object self, string address)
+    {
+        object lock_ = lock.acquire()
+        filter.TagGroupDeleteTagWithLabel(address)
+    }  
+}
+
+// ===========================================================================
+// 拍摄管理器，守护线程
 // ===========================================================================
 class AcquireManager : thread
 {
-    string XY_CONTINUOUS_ACQUIRE
-    string SP_CONTINUOUS_ACQUIRE
-    string STOP_CONTINUOUS_ACQUIRE
+    number XY_CONTINUOUS_ACQUIRE
+    number SP_CONTINUOUS_ACQUIRE
+    number STOP_CONTINUOUS_ACQUIRE
 
     number is_terminated  // 线程停止信号量
-    number is_running  // 执行任务信号量
-    object thread_mq  // 操作任务
+    object acquire_manager_mq  // 操作任务
     number thread_num  // 启用多少条线程执行拍摄任务
     object acquire_thread_manager  // 任务线程管理器，管理所有任务线程
+    object address_validator  // 地址验证器
 
-    object acquire_thread_message_prototype  // 连拍管理器消息
+    object acquire_manager_message_prototype  // 连拍管理器消息
     object acquire_task_prototype
+
 
     object Init(object self) 
     {
-        XY_CONTINUOUS_ACQUIRE = "XYContinuousAcquire"
-        SP_CONTINUOUS_ACQUIRE = "SPContinuousAcquire"
-        STOP_CONTINUOUS_ACQUIRE = "StopContinuousAcquire"
+        // option
+        XY_CONTINUOUS_ACQUIRE = 0
+        SP_CONTINUOUS_ACQUIRE = 1
+        STOP_CONTINUOUS_ACQUIRE = 2
 
         is_terminated = 0
-        thread_mq = NewMessageQueue()
+        acquire_manager_mq = NewMessageQueue()
         thread_num = config.get("acquire_thread_num").val()
         acquire_thread_manager = alloc(ThreadManager).Init("Acquire Thread Manager")
-        
+        address_validator = alloc(AddressValidator).Init()
 
-        acquire_thread_message_prototype = alloc(AcquireThreadMessage)  // 连拍管理器消息
+        acquire_manager_message_prototype = alloc(AcquireManagerMessage)  // 连拍管理器消息
         acquire_task_prototype = alloc(AcquireTask)
-
-        // 注册线程
-        for (number i = 0; i < thread_num; i ++)
-        {
-            object acquire_thread = alloc(AcquireThread).Init(acquire_thread_manager)
-            acquire_thread_manager.register(acquire_thread)
-        }
-
+        
         return self
     }
 
     void RunThread(object self) 
     {
+        // 注册线程
+        acquire_thread_manager.StartThread()  // 注册线程
+        for (number i = 0; i < thread_num; i ++)
+        {
+            object acquire_thread = alloc(AcquireThread).Init()
+            
+            acquire_thread.addValidator(address_validator)  // 添加验证器
+
+            acquire_thread_manager.register(acquire_thread)
+        }
         
         is_terminated = 0  // 初始化信号量
-        acquire_thread_manager.StartThread()  // 注册线程
-
         while (!is_terminated)
         {
-            object thread_message = thread_mq.WaitOnMessage(2, null)
-            if (thread_message.ScriptObjectIsValid())
+            object acquire_manager_message = acquire_manager_mq.WaitOnMessage(2, null)
+            if (acquire_manager_message.ScriptObjectIsValid())
             {
-                object request = thread_message.getRequest()
-                object response = thread_message.getResponse()
+                object request = acquire_manager_message.getRequest()
+                object response = acquire_manager_message.getResponse()
 
-                string option = request.getHeader("option")
+                number option = request.getHeader("option").val()
                 // 判断是否成功获取操作名
-                if (option == null) {
-                    // 未设置操作名
-                    response.set("code", "400")
-                    response.set("message", "'Option' cannot be found in request head")
-                    response_mq.PostMessage(response)  // 返回消息
-                }
 
                 number camID = request.get("cam_id").val()  // 准备相机
                 // CameraPrepareForAcquire(camID)
@@ -930,12 +991,13 @@ class AcquireManager : thread
                             areaB = math_utils.clamp(areaB, areaT, y_size - 1)
                             areaR = math_utils.clamp(areaR, areaL, x_size - 1)
 
+                            object request_ = request.ScriptObjectClone()
                             object response_ = response.ScriptObjectClone()
                             object acquire_task = acquire_task_prototype.ScriptObjectClone()
                             // 创建消息
                             // number processing = CameraGetGainNormalizedEnum( ) 
                             number processing = 1
-                            acquire_task = acquire_task.Init(response_, camID, exposure, x_bin, y_bin, processing, areaT, areaL, areaB, areaR)
+                            acquire_task = acquire_task.Init(request_, response_, camID, exposure, x_bin, y_bin, processing, areaT, areaL, areaB, areaR)
                             // 提交任务
                             acquire_task_mq.PostMessage(acquire_task)
                         }
@@ -944,12 +1006,18 @@ class AcquireManager : thread
 
                 else if (option == SP_CONTINUOUS_ACQUIRE)  // 单点连续拍摄
                 {
-                        
+                    
                 }
 
                 else if (option == STOP_CONTINUOUS_ACQUIRE)  // 停止连续拍摄
                 {
-                        
+
+                } 
+                else 
+                {
+                    response.set("code", "400")
+                    response.set("message", "Such option cannot map to any operation")
+                    response_mq.PostMessage(response)  // 返回消息
                 }
             }
         }
@@ -989,25 +1057,15 @@ class AcquireManager : thread
 
     void submit(object self, object request, object response)
     {
-        object thread_message = acquire_thread_message_prototype.ScriptObjectClone()
-        thread_message = thread_message.Init(request, response)
-        thread_mq.PostMessage(thread_message)
+        object acquire_manager_message = acquire_manager_message_prototype.ScriptObjectClone()
+        acquire_manager_message = acquire_manager_message.Init(request, response)
+        acquire_manager_mq.PostMessage(acquire_manager_message)
     }
 
     void terminate(object self) 
     {
         acquire_thread_manager.terminate()  // 停止任务线程管理器
         is_terminated = 1
-    }
-
-    void join(object self)
-    {
-        acquire_thread_manager.join()
-    }
-
-    void await(object self)
-    {
-        acquire_thread_manager.await()
     }
 
     string getName(object self)
@@ -1054,6 +1112,8 @@ class DMTaskDispatcher: object
     {
         acquire_manager.submit(request, response) // 提交任务
     }
+
+    // TODO: 获取相机参数API
 
 }
 
@@ -1256,13 +1316,13 @@ object output_thread = alloc(OutputThread).init()  // 输出线程
 
 // 程序初始化
 void init() {
+    // 守护线程注册
     // 启动主线程管理器
-    logger.debug(836, "Launching Main Thread Manager")
+    logger.debug(836, "Launching " + thread_manager.getName())
     thread_manager.StartThread()
     logger.debug(838, "Done")
 
-    // 启动拍摄线程管理器
-    logger.debug(836, "Launching Acquire Thread Manager")
+    logger.debug(836, "Launching " + acquire_manager.getName())
     acquire_manager.StartThread()
     logger.debug(838, "Done")
 
@@ -1275,10 +1335,10 @@ void init() {
     
     sleep(0.3)
     thread_manager.countRegisterThreadNum()
-    acquire_manager.countRegisterThreadNum()
-
     logger.debug(1124, thread_manager.getName() + " current register thread num : " + thread_manager.getRegisterThreadNum())
-    logger.debug(1124, acquire_manager.getName() + " current register thread num : " + acquire_manager.getRegisterThreadNum())
+
+    acquire_manager.countRegisterThreadNum()
+    logger.debug(1124, thread_manager.getName() + " current register thread num : " + acquire_manager.getRegisterThreadNum())
 }
 
 // ===========================================================================
@@ -1339,7 +1399,7 @@ class GUI : UIFrame
             acquire_manager.launch()
 
             // thread_manager.await()
-            // acquire_manager.await()
+            // acquire_task_dispatcher.await()
 
             sleep(0.1)
             logger.debug(1257, "Program threads all done register work!")
@@ -1362,7 +1422,7 @@ class GUI : UIFrame
             acquire_manager.stop()  // 停止拍摄进程
 
             // thread_manager.join()
-            // acquire_manager.join()
+            // acquire_task_dispatcher.join()
 
             sleep(0.1)
             logger.debug(785, "Program threads all done register work!")
