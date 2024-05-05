@@ -756,12 +756,19 @@ class AcquireThread: thread
                 object response = acquire_task.getResponse()
                 object request = acquire_task.getRequest()
 
+                number is_forbidden = 0
                 for (number i = 0; i < validators.SizeOfList(); i ++)
                 {
                     object validator = validators.ObjectAt(i)
                     if ( ! validator.validate(request, response))
-                        continue
+                    {
+                        is_forbidden = 1
+                        break
+                    }
                 }
+
+                if (is_forbidden)
+                    continue
 
                 acquire_task.doCameraAcquire()  // 执行拍摄
                 // 每次拍摄完成进行响应
@@ -916,6 +923,8 @@ class AcquireManager : thread
             {
                 object request = acquire_manager_message.getRequest()
                 object response = acquire_manager_message.getResponse()
+                
+                address_validator.permitAddress(request.getHeader("address"))  // 放行ip
 
                 number option = request.getHeader("option").val()
                 // 判断是否成功获取操作名
@@ -1011,7 +1020,12 @@ class AcquireManager : thread
 
                 else if (option == STOP_CONTINUOUS_ACQUIRE)  // 停止连续拍摄
                 {
+                    Logger.debug(1024, "Address Validatro reject ip: " + request.getHeader("address"))
+                    address_validator.rejectAddress(request.getHeader("address"))  // 拒绝ip
 
+                    response.set("code", "200")
+                    response.set("message", "Successfully reject ip")
+                    response_mq.PostMessage(response)  // 返回消息
                 } 
                 else 
                 {

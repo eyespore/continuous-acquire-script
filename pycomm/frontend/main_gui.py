@@ -53,15 +53,16 @@ class Gui(QWidget):
     # 渲染主界面
     def __init__(self):
         super().__init__()
-        self.client = None  # 消息转发
+        self.processor = None  # 消息转发
         logger.debug('Launching Main Thread')
         uic.loadUi(MENU_UI_PATH, self)
         self.setWindowTitle(DEF_WINDOW_TITLE)
         self.components = self.__dict__  # 将组件作为对象属性
         self.log_cache: List[str] = []  # 程序输出窗口信息缓存
-        self.client: MessageProcessor  # 网络连接
+        self.processor: MessageProcessor  # 网络连接
 
         self.done_task_num = 0  # 完成任务数
+        self.ignore_task_num = 0  # 忽略任务数
         self.task_num = 0  # 运行任务数
         self.lock = threading.Lock()  # 全局锁
 
@@ -81,6 +82,7 @@ class Gui(QWidget):
     ----------------------- init --------------------------------
     =============================================================
     """
+
     def init_gui(self):
         """ GUI组件初始化，主要负责图形化界面的初始化工作 """
         self.init_font()  # 初始化字体
@@ -114,15 +116,14 @@ class Gui(QWidget):
         self.components['load_cameras'].clicked.connect(self.load_cameras_slot)  # 刷新可用相机下拉选单
         self.components['enable_duration'].stateChanged.connect(self.check_enable_duration_slot)  # 是否启用单区域连拍持续时间
 
-        # 日志信号，控制日志输出
-        self.log_signal.connect(self.print_log)
-        # 渲染进度条
-        self.progress_signal.connect(self.set_progress)
+        self.log_signal.connect(self.print_log)  # 日志信号，控制日志输出
+        self.progress_signal.connect(self.set_progress)  # 渲染进度条
+        self.status_signal.connect(self.set_status)  # 设置窗体状态
 
     def init_network(self):
         # 网络初始化
-        self.client = MessageProcessor(config['server_host'], config['server_port'], config['server_timeout'])
-        self.client.start()
+        self.processor = MessageProcessor(config['server_host'], config['server_port'], config['server_timeout'])
+        self.processor.start()
 
     def init_font(self):
         # 初始化字体
@@ -228,7 +229,7 @@ class Gui(QWidget):
 
     def closeEvent(self, event):
         logger.debug('Closing network connection')
-        self.client.terminate()
+        self.processor.terminate()
         # self.message_processor.join()
         logger.debug('Frontend process successfully terminated')
         event.accept()
@@ -263,13 +264,17 @@ class Gui(QWidget):
 
         # 查询当前运行模式
         if self.status == Status.TERMINABLE:
-            # 停止连续拍摄
-            self.set_status(Status.UNAVAILABLE)
-            ...
+            self.set_status(Status.UNAVAILABLE)  # 停止连续拍摄
+
+            message = Message()
+            message.setHeader('name', 'ContinuousAcquire')
+            message.setHeader('option', 2)  # 停止连拍
+            self.processor.send_msg(message, self.stop_acquire_callback)
 
         # 如果状态为VANILLA，那么根据当前界面来决定执行
         if self.status == Status.VANILLA:
             self.set_status(Status.UNAVAILABLE)
+
             current_tab = self.components['mode_tab'].currentIndex()
             if current_tab == self.TAB_XY_CONTINUOUS_NUM:
                 self.xy_acquire()  # xy坐标横移连拍
@@ -287,6 +292,7 @@ class Gui(QWidget):
         y_split = self.components['y_splitting_format'].value()
 
         # 初始化任务
+        self.ignore_task_num = 0
         self.done_task_num = 0
         self.task_num = x_split * y_split
 
@@ -314,24 +320,30 @@ class Gui(QWidget):
         message.set('x_split', x_split)
         message.set('y_split', y_split)
 
-        self.client.send_msg(message, self.xy_acquire_callback)
+        self.print_log(f'submit {self.task_num} tasks')
+        self.processor.send_msg(message, self.xy_acquire_callback)  # 发送消息
+        self.status_signal.emit(Status.TERMINABLE)
+
+    def stop_acquire_callback(self, response: Message):
+        if response.get('code') == '200':
+            self.log_signal.emit('Cancel acquire task')
 
     def xy_acquire_callback(self, response: Message):
-        self.lock.acquire()
-        try:
+        if response.get('code') == '200':  # 任务成功执行
             self.done_task_num += 1
-            # 渲染进度条
-            position = MathUtil.clamp(round(100 / self.task_num * self.done_task_num), 0, 100)
+            position = MathUtil.clamp(round(100 / self.task_num * self.done_task_num), 0, 100)  # 渲染进度条
             self.progress_signal.emit(position)
+        elif response.get('code') == '403':  # 任务被忽略
+            self.ignore_task_num += 1
 
-            logger.debug(f'done task: {self.done_task_num} / {self.task_num}')
-
-            if self.done_task_num >= self.task_num:
-                self.progress_signal.emit(100)
-                self.log_signal.emit('Done xy acquire task!')
-                self.set_status(Status.VANILLA)
-        finally:
-            self.lock.release()
+        if self.done_task_num == self.task_num:  # 任务全部完成
+            self.progress_signal.emit(100)
+            self.log_signal.emit(f'Complete {self.done_task_num} tasks')
+            self.status_signal.emit(Status.VANILLA)
+        elif self.done_task_num + self.ignore_task_num == self.task_num:  # 部分任务被忽略
+            left_task_num = self.task_num - self.done_task_num
+            self.log_signal.emit(f'Left {left_task_num} tasks undone')
+            self.status_signal.emit(Status.VANILLA)
 
     def sp_acquire(self):
         self.set_progress(0)  # 清空进度条
@@ -370,11 +382,11 @@ class Gui(QWidget):
         message.set('x_bin', x_bin)
         message.set('y_bin', y_bin)
 
-        self.client.send_msg(message, self.sp_acquire_callback)
+        self.processor.send_msg(message, self.sp_acquire_callback)
 
     def sp_acquire_callback(self, response: Message):
         print(response)
-        self.set_status(Status.VANILLA)
+        self.status_signal.emit(Status.VANILLA)
 
     def check_stick_on_top_slot(self, num: int):
         flag = (num == self.CHECK_BOX_CHECKED)
@@ -427,7 +439,7 @@ class Gui(QWidget):
         控制台输出方法，可以向GUI中的控制台输出信息
         """
         # 通过菜单控制台打印日志输出
-        log_line = f'<span style="color:red">{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}:{line}</span><br/>'
+        log_line = f'<span style="color:red">{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}:</span><br/><span style="color:black">{line}</span><br/>'
         self.log_cache.append(log_line)
         text = " ".join(self.log_cache)
         self.components['program_output_text'].setText(text)

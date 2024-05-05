@@ -11,8 +11,8 @@ ui: # gui参数设定
     y_off: 0
     enable_extension: 1  # 是否启用拓展
     extension_unit: 0  # 拓展单位， 0：px、1：%
-    x_splitting_format: 3  # x、y轴分割片数
-    y_splitting_format: 2
+    x_splitting_format: 20  # x、y轴分割片数
+    y_splitting_format: 20
     multi_thread_num: 5  # 拍摄时线程、进程池中线程、进程数
     multi_process_num: 5
   sp: # 单点连续拍摄默认参数设置
