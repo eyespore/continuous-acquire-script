@@ -6,35 +6,28 @@ import cmd
 from loguru import logger
 
 from config_util import config
-from data_processor import MessageProcessor
-
-logger.info(f'Launching MainCMD program by python')
-message_processor = MessageProcessor(config['server_host'], config['server_port'], config['server_timeout'])
-
-
-def when_recv(message):
-    pass
+from pycomm.util.network_util import ClientSocketProcessor, Message
 
 
 class MainCmd(cmd.Cmd):
     prompt = '> '
 
+    def __init__(self):
+        logger.info(f'Launching MainCMD program by python')
+        super().__init__()
+        self.processor = ClientSocketProcessor(
+            config['server_host'], config['server_port'], config['server_timeout'])
+
     def do_send(self, line):
         """ 以字符串的形式发送请求 """
-        message_processor.send_str(line, when_recv)
+        self.processor.send(Message.loads(line))
 
     def do_quit(self, line):
         """ 终止程序 """
-        message_processor.terminate()
-        message_processor.join()
+        self.processor.terminate()
         logger.info('MainCMD successfully shutdown')
         return True
 
 
-def main():
-    message_processor.start()  # 初始化消息转发器
-    MainCmd().cmdloop("Program already launched, Type 'help' for available commands.")
-
-
 if __name__ == '__main__':
-    main()
+    MainCmd().cmdloop("Program already launched, Type 'help' for available commands.")

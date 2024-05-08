@@ -3,7 +3,6 @@ Created on 2024.4.9
 @author: Pineclone
 """
 import sys
-import threading
 from datetime import datetime
 from enum import Enum
 from typing import List
@@ -17,8 +16,7 @@ from loguru import logger
 
 from config_util import config
 from pycomm.util.math_util import MathUtil
-from pycomm.util.network import Message
-from data_processor import MessageProcessor
+from pycomm.util.network_util import ClientSocketProcessor, Message
 
 logger.info(f'Launching frontend process by python')
 QtCore.QCoreApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling)  # 修正窗口界面尺寸
@@ -53,18 +51,17 @@ class Gui(QWidget):
     # 渲染主界面
     def __init__(self):
         super().__init__()
-        self.processor = None  # 消息转发
+        self.status = Status.VANILLA
         logger.debug('Launching Main Thread')
         uic.loadUi(MENU_UI_PATH, self)
         self.setWindowTitle(DEF_WINDOW_TITLE)
         self.components = self.__dict__  # 将组件作为对象属性
         self.log_cache: List[str] = []  # 程序输出窗口信息缓存
-        self.processor: MessageProcessor  # 网络连接
+        self.processor = ClientSocketProcessor(config['server_host'], config['server_port'], config['server_timeout'])
 
         self.done_task_num = 0  # 完成任务数
         self.ignore_task_num = 0  # 忽略任务数
         self.task_num = 0  # 运行任务数
-        self.lock = threading.Lock()  # 全局锁
 
         logger.debug('Initializing GUI')
         self.init_gui()  # 初始化GUI界面
@@ -72,8 +69,8 @@ class Gui(QWidget):
         self.init_threads()  # 初始化子线程
         logger.debug('Initializing Signals and Slot')
         self.init_signals()  # 绑定信号和槽函数
-        logger.debug('Initializing Network Connection')
-        self.init_network()  # 初始化网络
+        logger.debug('Initializing Network')
+        self.processor.launch()  # 网络初始化
 
         logger.info('Successfully launch Main UI')
 
@@ -119,11 +116,6 @@ class Gui(QWidget):
         self.log_signal.connect(self.print_log)  # 日志信号，控制日志输出
         self.progress_signal.connect(self.set_progress)  # 渲染进度条
         self.status_signal.connect(self.set_status)  # 设置窗体状态
-
-    def init_network(self):
-        # 网络初始化
-        self.processor = MessageProcessor(config['server_host'], config['server_port'], config['server_timeout'])
-        self.processor.start()
 
     def init_font(self):
         # 初始化字体
@@ -230,7 +222,6 @@ class Gui(QWidget):
     def closeEvent(self, event):
         logger.debug('Closing network connection')
         self.processor.terminate()
-        # self.message_processor.join()
         logger.debug('Frontend process successfully terminated')
         event.accept()
 
@@ -251,8 +242,7 @@ class Gui(QWidget):
 
     # 清除控制台输出
     def click_output_clean_slot(self):
-        # 清空日志窗口内容
-        self.log_cache.clear()
+        self.log_cache.clear()  # 清空日志窗口内容
         self.components['program_output_text'].setText('')
 
     def click_exec_btn_slot(self):
@@ -269,7 +259,7 @@ class Gui(QWidget):
             message = Message()
             message.setHeader('name', 'ContinuousAcquire')
             message.setHeader('option', 2)  # 停止连拍
-            self.processor.send_msg(message, self.stop_acquire_callback)
+            self.processor.sendAsync(message, self.stop_acquire_callback)
 
         # 如果状态为VANILLA，那么根据当前界面来决定执行
         if self.status == Status.VANILLA:
@@ -321,7 +311,7 @@ class Gui(QWidget):
         message.set('y_split', y_split)
 
         self.print_log(f'submit {self.task_num} tasks')
-        self.processor.send_msg(message, self.xy_acquire_callback)  # 发送消息
+        self.processor.sendAsync(message, self.xy_acquire_callback)  # 发送消息
         self.status_signal.emit(Status.TERMINABLE)
 
     def stop_acquire_callback(self, response: Message):
@@ -382,7 +372,7 @@ class Gui(QWidget):
         message.set('x_bin', x_bin)
         message.set('y_bin', y_bin)
 
-        self.processor.send_msg(message, self.sp_acquire_callback)
+        self.processor.fetch(message, self.sp_acquire_callback)
 
     def sp_acquire_callback(self, response: Message):
         print(response)

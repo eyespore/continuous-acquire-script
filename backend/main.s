@@ -882,7 +882,6 @@ class AcquireManager : thread
     object acquire_manager_message_prototype  // 连拍管理器消息
     object acquire_task_prototype
 
-
     object Init(object self) 
     {
         // option
