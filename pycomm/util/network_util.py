@@ -2,6 +2,7 @@ import os
 import queue
 import socket
 import threading
+import time
 import uuid
 from typing import Callable, Dict, List
 
@@ -313,15 +314,16 @@ class ClientSocketProcessor(Processor):
         self.proxy.onLaunching(ClientSocketProcessor.launchingProxy)
         self.proxy.onClosing(lambda reason: logger.info(f'ConnectionProxy Closed: {reason}'))
 
-    def sendAsync(self, message, callback: Callable[[Message], None]) -> None:
+    def send(self, message, callback: Callable[[Message], None] = None) -> None:
         """
         直接发送消息实例，消息回传之后会执行回调函数
         :param message: message实例
         :param callback: 回调函数，在请求响应时会被调用
         """
-        callback_id = str(uuid.uuid4())
-        message.setHeader('callback_id', callback_id)  # 注册回调
-        self.callbacks[callback_id] = callback
+        if callback:
+            callback_id = str(uuid.uuid4())
+            message.setHeader('callback_id', callback_id)  # 注册回调
+            self.callbacks[callback_id] = callback
         self.proxy.send(message)  # 发送消息
 
     @staticmethod
@@ -334,9 +336,10 @@ class ClientSocketProcessor(Processor):
 
     def onReceiving(self, message: Message) -> None:
         callback_id = message.getHeader('callback_id')
-        callback = self.callbacks.get(callback_id)
-        if callback:
-            callback(message)
+        if callback_id:
+            callback = self.callbacks.get(callback_id)
+            if callback:
+                callback(message)
 
     def terminate(self, synchronized: bool = False):
         self.proxy.terminate()
@@ -422,6 +425,7 @@ class ServerSocketProcessor(Processor):
 
     class ConnectionContext:
         def __init__(self, app_context):
+            self.is_terminated = False
             self.lock = threading.RLock()  # 全局锁
             self.app_context = app_context
             self.connection_context: Dict[str, ConnectionProxy] = {}
@@ -431,6 +435,10 @@ class ServerSocketProcessor(Processor):
 
             def onClosing(reason: str) -> None:  # 构建代理对象
                 logger.info(f'Connection {str(address)} closed: {reason}')
+                connection_closing_message = Message()  # 向后端提交连接断开事件
+                connection_closing_message.setHeader('address', address)
+                connection_closing_message.set('name', 'ConnectionClosing')
+                self.app_context.request_pipline.postMessage(connection_closing_message)
                 self.remConnection(address)
 
             def onReceiving(message: Message) -> None:
@@ -449,6 +457,8 @@ class ServerSocketProcessor(Processor):
             return proxy
 
         def remConnection(self, address) -> None:
+            if self.is_terminated:  # 避免删除造成死锁
+                return
             with self.lock:
                 try:
                     self.connection_context.pop(str(address))
@@ -456,10 +466,9 @@ class ServerSocketProcessor(Processor):
                     logger.error(f'Hit nonexistent key: {e}')
 
         def terminate(self) -> None:
+            self.is_terminated = True
             with self.lock:
                 for address, proxy in self.connection_context.items():
-                    # 若是强制关闭中间件，此时关闭连接对象时将连接对象从容器剔除会发生死锁
-                    proxy.onClosing(lambda reason: logger.info(f'Connection {str(address)} closed: {reason}'))
                     proxy.terminate()
 
         def join(self):
@@ -583,6 +592,7 @@ class DMProcessor(Processor):
 
         def run(self) -> None:
             while not self.is_terminated:
+                time.sleep(0.1)  # 应该避免过度频繁地读取管道文件
                 if not os.path.exists(self.app_context.output_pip_lock):  # 锁文件不存在时可以执行读取操作
                     read_pip = None
                     try:

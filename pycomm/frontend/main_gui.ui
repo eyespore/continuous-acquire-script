@@ -44,7 +44,7 @@
     <enum>QTabWidget::North</enum>
    </property>
    <property name="currentIndex">
-    <number>0</number>
+    <number>1</number>
    </property>
    <widget class="QWidget" name="tab_1">
     <attribute name="title">
@@ -281,9 +281,9 @@
      <widget class="QWidget" name="horizontalLayoutWidget_6">
       <property name="geometry">
        <rect>
-        <x>0</x>
+        <x>50</x>
         <y>40</y>
-        <width>271</width>
+        <width>221</width>
         <height>31</height>
        </rect>
       </property>
@@ -297,7 +297,7 @@
        <item>
         <widget class="QCheckBox" name="enable_duration">
          <property name="text">
-          <string>limit duration</string>
+          <string>duration</string>
          </property>
         </widget>
        </item>
@@ -340,6 +340,31 @@
         <widget class="QSpinBox" name="framerate">
          <property name="minimum">
           <number>1</number>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+     <widget class="QWidget" name="horizontalLayoutWidget_11">
+      <property name="geometry">
+       <rect>
+        <x>0</x>
+        <y>40</y>
+        <width>51</width>
+        <height>31</height>
+       </rect>
+      </property>
+      <layout class="QHBoxLayout" name="enable_optimize_layout">
+       <property name="leftMargin">
+        <number>15</number>
+       </property>
+       <property name="rightMargin">
+        <number>0</number>
+       </property>
+       <item>
+        <widget class="QCheckBox" name="enable_optimize">
+         <property name="text">
+          <string>fix</string>
          </property>
         </widget>
        </item>
@@ -565,6 +590,38 @@
      <string>load</string>
     </property>
    </widget>
+  </widget>
+  <widget class="QWidget" name="horizontalLayoutWidget_10">
+   <property name="geometry">
+    <rect>
+     <x>150</x>
+     <y>180</y>
+     <width>191</width>
+     <height>31</height>
+    </rect>
+   </property>
+   <layout class="QHBoxLayout" name="horizontalLayout_6">
+    <item>
+     <widget class="QLabel" name="complete_acquire_label">
+      <property name="text">
+       <string>complete acquire:</string>
+      </property>
+      <property name="alignment">
+       <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
+      </property>
+     </widget>
+    </item>
+    <item>
+     <widget class="QLabel" name="complete_acquire_acquire_count">
+      <property name="text">
+       <string>NAN</string>
+      </property>
+      <property name="alignment">
+       <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
+      </property>
+     </widget>
+    </item>
+   </layout>
   </widget>
  </widget>
  <resources/>

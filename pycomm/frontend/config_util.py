@@ -62,13 +62,13 @@ with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
     load_val('multi_thread_num', lambda: yml_cfg['ui']['xy']['multi_thread_num'], 10)  # 默认线程数
     load_val('multi_process_num', lambda: yml_cfg['ui']['xy']['multi_process_num'], 5)  # 默认线程数
 
-    # 单点连续拍摄参数初始化
-    load_val('pos_for_sp', lambda: yml_cfg['ui']['sp']['pos_for_sp'],
-             [0, 0, 0, 0])  # 默认坐标参数，从上到下依次是top,left,bottom,right
+    # 单点连续拍摄参数初始化 # 默认坐标参数，从上到下依次是top,left,bottom,right
+    load_val('pos_for_sp', lambda: yml_cfg['ui']['sp']['pos_for_sp'], [0, 0, 0, 0])
     load_val('enable_duration', lambda: yml_cfg['ui']['sp']['enable_duration'], False)  # 是否开启持续时间
     load_val('duration_value', lambda: yml_cfg['ui']['sp']['duration_value'], 10)  # 默认持续时间
     load_val('duration_unit', lambda: yml_cfg['ui']['sp']['duration_unit'], 1)  # 持续连拍默认采用时间单位
     load_val('framerate', lambda: yml_cfg['ui']['sp']['framerate'], 10)  # 持续连拍默认采用时间单位
+    load_val('enable_optimize', lambda: yml_cfg['ui']['sp']['enable_optimize'], True)  # 是否启用坐标修正
 
     # 界面参数设定
     load_val('font', lambda: yml_cfg['ui']['nor']['font'], 'consolas')

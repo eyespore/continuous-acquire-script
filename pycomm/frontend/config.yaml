@@ -11,20 +11,21 @@ ui: # gui参数设定
     y_off: 0
     enable_extension: 1  # 是否启用拓展
     extension_unit: 0  # 拓展单位， 0：px、1：%
-    x_splitting_format: 20  # x、y轴分割片数
-    y_splitting_format: 20
+    x_splitting_format: 5  # x、y轴分割片数
+    y_splitting_format: 5
     multi_thread_num: 5  # 拍摄时线程、进程池中线程、进程数
     multi_process_num: 5
   sp: # 单点连续拍摄默认参数设置
     pos_for_sp: # 默认坐标参数，从上到下依次是top,left,bottom,right
       - 0
       - 0
-      - 0
-      - 0
-    enable_duration: False  # 是否开启持续时间
-    duration_value: 10  # 默认持续时间
-    duration_unit: 1  # 持续连拍默认采用时间单位
-    framerate: 10  # 默认帧率
+      - 100
+      - 12
+    enable_duration: True  # 是否开启持续时间
+    duration_value: 5  # 默认持续时间
+    duration_unit: 0  # 持续连拍默认采用时间单位
+    framerate: 1  # 默认帧率
+    enable_optimize: True  # 是否启用坐标修正
 server:
   # 连接目标端口号和地址
   host: 127.0.0.1
