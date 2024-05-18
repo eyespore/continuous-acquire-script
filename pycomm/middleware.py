@@ -10,10 +10,10 @@ import cmd
 import yaml
 from loguru import logger
 
-from pycomm.util.network_util import ServerSocketProcessor, DMProcessor
-from pycomm.util.properties import Properties
+from util.network_util import ServerSocketProcessor, DMProcessor
+from util.properties import Properties
 
-with open('./config.yaml', 'r', encoding='utf-8') as f:
+with open('./middleware_config.yaml', 'r', encoding='utf-8') as f:
     config = yaml.safe_load(f)
 
 logger.info(f'Launching MQ process by python')

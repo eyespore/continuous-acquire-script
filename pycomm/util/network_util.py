@@ -126,7 +126,6 @@ class PipComponent(threading.Thread):
         if isinstance(dst, queue.Queue):
             self.output_buffer = dst
         elif isinstance(dst, PipComponent):
-            logger.debug(f'linked {self} to {dst}')
             self.output_buffer = dst.input_buffer
 
     def run(self):
@@ -514,11 +513,9 @@ class DMProcessor(Processor):
         # 检查管道文件是否存在
         if not os.path.exists(self.input_pip_path):
             logger.error('Unable to find pip file, check if a dm script is running')
-            raise FileNotFoundError(f'{self.input_pip_path} pip file not found')
 
         if not os.path.exists(self.output_pip_path):
             logger.error('Unable to find pip file, check if a dm script is running')
-            raise FileNotFoundError(f'{self.output_pip_path} pip file not found')
 
         self.pip_writer = self.PipFileWriter(self)
         self.pip_reader = self.PipFileReader(self)
