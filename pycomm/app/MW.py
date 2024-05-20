@@ -4,32 +4,48 @@ Created on 2024.4.24
 @version: 0.0.1
 主要是为后端提供socket连接适配，创建中间件线程接收前端数据，处理之后将数据转发到后端程序，
 """
-
 import cmd
-
-import yaml
 from loguru import logger
+from pycomm.app.comm import ServerSocketProcessor, DMProcessor
+from . import config
 
-from pycomm.util.network_util import ServerSocketProcessor, DMProcessor
-from pycomm.util.properties import Properties
 
-with open('./config.yaml', 'r', encoding='utf-8') as f:
-    config = yaml.safe_load(f)
+class Properties:
+    """
+    Properties配置文件类
+    """
+    def __init__(self, file_name):
+        self.file_name = file_name
+
+    def get_prop(self):
+        try:
+            pro_file = open(self.file_name, 'r', encoding='utf-8')
+            properties = {}
+            for line in pro_file:
+                if line.find('=') > 0:
+                    strs = line.replace('\n', '').split('=')
+                    properties[strs[0]] = strs[1]
+        except Exception as e:
+            raise e
+        else:
+            pro_file.close()
+        return properties
+
 
 logger.info(f'Launching MQ process by python')
-logger.debug(f'Loading backend process config, path: {config["path"]["backend_config"]}')
-prop_cfg = Properties(config['path']['backend_config']).get_prop()
+logger.debug(f'Loading backend process config, path: {config.BE_CONFIG_PATH}')
+prop = Properties(config.BE_CONFIG_PATH).get_prop()
 logger.debug(f'Complete loading program config')
 
-input_pip_path = prop_cfg['input_pip_path']  # 输入管道文件
-input_pip_lock = prop_cfg['input_pip_lock']  # 输入管道锁文件
-output_pip_path = prop_cfg['output_pip_path']  # 输出管道文件
-output_pip_lock = prop_cfg['output_pip_lock']  # 输出管道锁文件
+input_pip_path = prop['input_pip_path']  # 输入管道文件
+input_pip_lock = prop['input_pip_lock']  # 输入管道锁文件
+output_pip_path = prop['output_pip_path']  # 输出管道文件
+output_pip_lock = prop['output_pip_lock']  # 输出管道锁文件
 
-encoding = config['server']['encoding']  # 编码格式
-host = config['server']['host']  # 中间件绑定ip地址
-port = config['server']['port']  # 中间件绑定端口
-timeout = config['server']['timeout']  # 超时时间，超时后会再次检查线程状态
+encoding = config.LISTEN_ENCODING  # 编码格式
+host = config.LISTEN_HOST  # 中间件绑定ip地址
+port = config.LISTEN_PORT  # 中间件绑定端口
+timeout = config.LISTEN_TIMEOUT  # 超时时间，超时后会再次检查线程状态
 
 dm_config = {
     'timeout': timeout,
@@ -41,7 +57,7 @@ dm_config = {
 }
 
 
-class MiddlewareCMD(cmd.Cmd):
+class CMD(cmd.Cmd):
     prompt = '> '
 
     def __init__(self):
@@ -80,7 +96,7 @@ class MiddlewareCMD(cmd.Cmd):
         """Default action for any command not recognized"""
         print("指令未识别，键入 'help' 来查询可用的指令.")
 
+    @staticmethod
+    def run():
+        CMD().cmdloop("Successfully launch Middleware for DM Script, input 'help' for available command.")
 
-if __name__ == '__main__':
-    # 启动命令行程序，避免进程退出
-    MiddlewareCMD().cmdloop("Successfully launch Middleware for DM Script, input 'help' for available command.")

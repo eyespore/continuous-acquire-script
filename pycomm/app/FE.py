@@ -2,12 +2,12 @@
 Created on 2024.4.9
 @author: Pineclone
 """
+import cmd
 import sys
 from datetime import datetime
 from enum import Enum
 from typing import List
 
-import yaml
 from PyQt5 import QtCore
 from PyQt5 import uic
 from PyQt5.QtCore import Qt, pyqtSignal
@@ -15,15 +15,13 @@ from PyQt5.QtGui import QIntValidator, QFont
 from PyQt5.QtWidgets import *
 from loguru import logger
 
-from config_util import config
-from pycomm.util.math_util import MathUtil
-from pycomm.util.network_util import ClientSocketProcessor, Message
+from . import config
+from pycomm.app.comm import ClientSocketProcessor, Message
 
 logger.info(f'Launching frontend process by python')
 QtCore.QCoreApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling)  # 修正窗口界面尺寸
 
-MENU_UI_PATH = f'main_gui.ui'  # 菜单UI路径设定
-DEF_FONT = QFont(config['font'], config['font_size'])  # 字体设定
+DEF_FONT = QFont(config.UI_FONT, config.UI_FONTSIZE)  # 字体设定
 DEF_WINDOW_TITLE = 'continuous acquire scripts'  # 窗口标题设置
 DEF_WIDTH_WITHOUT_LOG = 350  # 窗口大小设置
 DEF_WIDTH_WITH_LOG = 520
@@ -38,7 +36,31 @@ class Status(Enum):
     XY_ACQUIRE_RUN = {'tag': '-XY-', 'title': 'xp acquire run'}
 
 
-class Gui(QWidget):
+class CMD(cmd.Cmd):
+    prompt = '> '
+
+    def __init__(self):
+        logger.info(f'Launching MainCMD program by python')
+        super().__init__()
+        self.processor = ClientSocketProcessor(
+            config.CONNECT_HOST, config.CONNECT_PORT, config.CONNECT_TIMEOUT)
+
+    def do_send(self, line):
+        """ 以字符串的形式发送请求 """
+        self.processor.send(Message.loads(line))
+
+    def do_quit(self, line):
+        """ 终止程序 """
+        self.processor.terminate()
+        logger.info('MainCMD successfully shutdown')
+        return True
+
+    @staticmethod
+    def run():
+        CMD().cmdloop("Program already launched, Type 'help' for available commands.")
+
+
+class GUI(QWidget):
     # 基础常量
     CHECK_BOX_CHECKED = 2  # 单选框被选中后表现的value
     TAB_XY_CONTINUOUS_NUM = 0  # xy坐标横移连拍tab对应的下标
@@ -50,6 +72,17 @@ class Gui(QWidget):
     log_signal = pyqtSignal(str)  # 控制台信号，提供线程在控制台打印输出的能力
     status_signal = pyqtSignal(Status)  # 回复执行按钮信号，提供线程恢复主控按钮exec的能力
     count_signal = pyqtSignal(int)  # 统计目前完成拍摄数量
+
+    @staticmethod
+    def clamp(val, min_val, max_val):
+        """
+        Clamp value between min_val and max_val
+        """
+        if val <= min_val:
+            return min_val
+        if val >= max_val:
+            return max_val
+        return val
 
     class TaskCountManager:
         def __init__(self, app_context):
@@ -75,7 +108,7 @@ class Gui(QWidget):
                 self.ignored -= 1
 
         def getPercentage(self):  # 以整数返回
-            return MathUtil.clamp(round(100 / self.total * self.done), 0, 100)
+            return GUI.clamp(round(100 / self.total * self.done), 0, 100)
 
         def getLeftNum(self):
             return self.total - self.done
@@ -99,12 +132,12 @@ class Gui(QWidget):
         super().__init__()
         self.status = Status.VANILLA
         logger.debug('Launching Main Thread')
-        uic.loadUi(MENU_UI_PATH, self)
+        uic.loadUi(config.UI_PATH, self)
         self.setWindowTitle(DEF_WINDOW_TITLE)
         self.components = self.__dict__  # 将组件作为对象属性
         self.log_cache: List[str] = []  # 程序输出窗口信息缓存
-        self.processor = ClientSocketProcessor(config['server_host'], config['server_port'], config['server_timeout'])
-        self.count_manager = Gui.TaskCountManager(self)  # 任务计数器
+        self.processor = ClientSocketProcessor(config.CONNECT_HOST, config.CONNECT_PORT, config.CONNECT_TIMEOUT)
+        self.count_manager = GUI.TaskCountManager(self)  # 任务计数器
 
         logger.debug('Initializing GUI')
         self.init_gui()  # 初始化GUI界面
@@ -178,32 +211,30 @@ class Gui(QWidget):
         self.components['single_pos_bottom'].setValidator(QIntValidator())
         self.components['single_pos_right'].setValidator(QIntValidator())
 
-        with open('./config.yaml', 'r', encoding='utf-8') as f:
-            positions = yaml.safe_load(f)['ui']['sp']['pos_for_sp']
-        self.components['single_pos_top'].setText(str(positions[0]))
-        self.components['single_pos_left'].setText(str(positions[1]))
-        self.components['single_pos_bottom'].setText(str(positions[2]))
-        self.components['single_pos_right'].setText(str(positions[3]))
+        self.components['single_pos_top'].setText(str(config.SP_AREA_T))
+        self.components['single_pos_left'].setText(str(config.SP_AREA_T))
+        self.components['single_pos_bottom'].setText(str(config.SP_AREA_T))
+        self.components['single_pos_right'].setText(str(config.SP_AREA_T))
 
     def init_enable_duration(self):
         # 初始化是否启用持续时间
-        self.components['enable_duration'].setChecked(config['enable_duration'])
-        self.components['duration_value'].setEnabled(config['enable_duration'])
-        self.components['duration_unit'].setEnabled(config['enable_duration'])
+        self.components['enable_duration'].setChecked(config.SP_ENABLE_DURATION)
+        self.components['duration_value'].setEnabled(config.SP_ENABLE_DURATION)
+        self.components['duration_unit'].setEnabled(config.SP_ENABLE_DURATION)
 
     def init_enable_optimize(self):
         # 初始化是否启用持续时间
-        self.components['enable_optimize'].setChecked(config['enable_optimize'])
+        self.components['enable_optimize'].setChecked(config.SP_ENABLE_OPTIMIZE)
 
     def init_framerate(self):
         # 初始化默认拍摄帧率
-        self.components['framerate'].setValue(config['framerate'])
+        self.components['framerate'].setValue(config.SP_FRAMERATE)
 
     def init_duration_value(self):
         for unit in self.DEF_DURATION_UNIT_LIST:
             self.components['duration_unit'].addItem(unit)
-        self.components['duration_value'].setValue(config['duration_value'])
-        self.components['duration_unit'].setCurrentIndex(config['duration_unit'])
+        self.components['duration_value'].setValue(config.SP_DURATION_VALUE)
+        self.components['duration_unit'].setCurrentIndex(config.SP_DURATION_UNIT)
 
     def init_camera_combo_box(self):
         # TODO: 从后端获取相机信息封装成为字典返回
@@ -215,20 +246,20 @@ class Gui(QWidget):
 
     def init_binning(self):
         # 初始化binning选择控件
-        self.components['x_bin'].setValue(config['x_bin'])
-        self.components['y_bin'].setValue(config['y_bin'])
+        self.components['x_bin'].setValue(config.UI_X_BIN)
+        self.components['y_bin'].setValue(config.UI_Y_BIN)
 
     def init_exposure(self):
         # 初始化曝光度输出框
         self.components['exposure'].setValidator(QIntValidator())
-        self.components['exposure'].setText(str(config['exposure']))
+        self.components['exposure'].setText(str(config.UI_EXPOSURE))
 
     def init_progress_bar(self):
         # 初始化进度条
         self.components['progress_bar'].setValue(0)
 
     def init_program_output(self):
-        if config['enable_log']:
+        if config.UI_ENABLE_LOG:
             self.stick_resize(DEF_WIDTH_WITH_LOG, DEF_HEIGHT)
             self.components['program_output'].setChecked(True)
         else:
@@ -237,8 +268,8 @@ class Gui(QWidget):
 
     def init_splitting_format(self):
         # 切割规格选择
-        self.components['x_splitting_format'].setValue(config['x_splitting_format'])
-        self.components['y_splitting_format'].setValue(config['y_splitting_format'])
+        self.components['x_splitting_format'].setValue(config.XY_X_SPLIT)
+        self.components['y_splitting_format'].setValue(config.XY_Y_SPLIT)
 
     def init_stick_on_top(self):
         # 设置窗口是否可以一直处于顶端
@@ -255,14 +286,14 @@ class Gui(QWidget):
         for unit in self.DEF_EXTENSION_UNIT_LIST:
             self.components['unit_combo'].addItem(unit)  # 单位选择
 
-        flag = (config['enable_extension'] == 1)
+        flag = config.XY_ENABLE_EXTENSION
         self.components['enable_extension'].setChecked(flag)
         self.components['x_off'].setEnabled(flag)
         self.components['y_off'].setEnabled(flag)
         self.components['unit_combo'].setEnabled(flag)
-        self.components['x_off'].setValue(config['x_off'])  # 设置x，y偏移量
-        self.components['y_off'].setValue(config['y_off'])
-        self.components['unit_combo'].setCurrentIndex(config['extension_unit'])  # 设置当前选择单位
+        self.components['x_off'].setValue(config.XY_X_OFF)  # 设置x，y偏移量
+        self.components['y_off'].setValue(config.XY_Y_OFF)
+        self.components['unit_combo'].setCurrentIndex(config.XY_EXTENSION_UNIT)  # 设置当前选择单位
 
     """
     =============================================================
@@ -289,7 +320,7 @@ class Gui(QWidget):
         self.init_camera_combo_box()
 
     def set_progress(self, val: int):
-        self.components['progress_bar'].setValue(MathUtil.clamp(val, 0, 100))  # 设置进度条
+        self.components['progress_bar'].setValue(GUI.clamp(val, 0, 100))  # 设置进度条
 
     # 清除控制台输出
     def click_output_clean_slot(self):
@@ -555,10 +586,10 @@ class Gui(QWidget):
         bottom = self.components['program_output_text'].verticalScrollBar().maximum()
         self.components['program_output_text'].verticalScrollBar().setValue(bottom)  # 滚动到最底部
 
+    @staticmethod
+    def run():
+        app = QApplication(sys.argv)
+        menu = GUI()
+        menu.show()
+        app.exec_()
 
-if __name__ == '__main__':
-    # 主执行函数
-    app = QApplication(sys.argv)
-    menu = Gui()
-    menu.show()
-    app.exec_()
