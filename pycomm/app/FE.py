@@ -16,7 +16,7 @@ from PyQt5.QtWidgets import *
 from loguru import logger
 
 from . import config
-from pycomm.app.comm import ClientSocketProcessor, Message
+from .comm import ClientSocketProcessor, Message
 
 logger.info(f'Launching frontend process by python')
 QtCore.QCoreApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling)  # 修正窗口界面尺寸

@@ -6,7 +6,7 @@ Created on 2024.4.24
 """
 import cmd
 from loguru import logger
-from pycomm.app.comm import ServerSocketProcessor, DMProcessor
+from .comm import ServerSocketProcessor, DMProcessor
 from . import config
 
 
